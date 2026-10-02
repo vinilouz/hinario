@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { X, Camera, Clipboard, AlertCircle, CheckCircle2 } from "lucide-react";
 import { Html5Qrcode } from "html5-qrcode";
-import { decodePayloadToSetlist } from "../services/qrSharing";
+import { decodePayloadToSetlist, parseQrChunk, joinQrChunks } from "../services/qrSharing";
 import { useSetlists } from "../context/SetlistListsContext";
 import type { Song } from "../types";
 
@@ -26,6 +26,13 @@ export const ScanQrModal: React.FC<ScanQrModalProps> = ({ isOpen, onClose }) => 
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [scannedData, setScannedData] = useState<DecodedSetlist | null>(null);
+  const [chunkProgress, setChunkProgress] = useState<{ got: number; total: number } | null>(null);
+  const chunksRef = useRef<Map<number, string>>(new Map());
+
+  const resetChunks = () => {
+    chunksRef.current.clear();
+    setChunkProgress(null);
+  };
 
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const isScanningRef = useRef<boolean>(false);
@@ -48,6 +55,28 @@ export const ScanQrModal: React.FC<ScanQrModalProps> = ({ isOpen, onClose }) => 
 
   const handleProcessCode = async (code: string) => {
     setErrorMsg(null);
+    const chunk = parseQrChunk(code);
+    if (chunk) {
+      chunksRef.current.set(chunk.i, code);
+      if (chunksRef.current.size < chunk.t) {
+        setChunkProgress({ got: chunksRef.current.size, total: chunk.t });
+        return;
+      }
+      const joined = joinQrChunks([...chunksRef.current.values()]);
+      resetChunks();
+      if (!joined) {
+        setErrorMsg("Falha ao juntar as páginas do código. Escaneie a sequência de novo.");
+        return;
+      }
+      const decoded = await decodePayloadToSetlist(joined);
+      if (!decoded) {
+        setErrorMsg("QR Code ou código inválido. Verifique se copiou o código completo.");
+        return;
+      }
+      setScannedData(decoded);
+      await stopScanner();
+      return;
+    }
     const decoded = await decodePayloadToSetlist(code);
     if (!decoded) {
       setErrorMsg("QR Code ou código inválido. Verifique se copiou o código completo.");
@@ -60,6 +89,7 @@ export const ScanQrModal: React.FC<ScanQrModalProps> = ({ isOpen, onClose }) => 
   useEffect(() => {
     if (!isOpen) {
       stopScanner();
+      resetChunks();
       setScannedData(null);
       setErrorMsg(null);
       setSuccessMsg(null);
@@ -189,7 +219,10 @@ export const ScanQrModal: React.FC<ScanQrModalProps> = ({ isOpen, onClose }) => 
               </button>
 
               <button
-                onClick={() => setScannedData(null)}
+                onClick={() => {
+                  resetChunks();
+                  setScannedData(null);
+                }}
                 className="w-full h-8 flex items-center justify-center text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] emil-press"
               >
                 Escanear Outra
@@ -226,6 +259,12 @@ export const ScanQrModal: React.FC<ScanQrModalProps> = ({ isOpen, onClose }) => 
             {activeTab === "camera" && (
               <p className="text-xs text-[var(--color-text-secondary)] text-left leading-relaxed">
                 Aponte a câmera para o código na tela do outro celular.
+                {chunkProgress && (
+                  <>
+                    {" "}Recebidos {chunkProgress.got} de {chunkProgress.total} — continue
+                    apontando para os próximos códigos.
+                  </>
+                )}
               </p>
             )}
 

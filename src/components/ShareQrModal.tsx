@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from "react";
 import { createPortal } from "react-dom";
-import { X, Copy, Check, QrCode, Share2, Send } from "lucide-react";
-import { encodeSetlistToPayload, generateQrDataUrl } from "../services/qrSharing";
-import type { Setlist } from "../types";
+import { X, Copy, Check, QrCode, Share2, Send, ChevronLeft, ChevronRight } from "lucide-react";
+import { encodeSetlistToPayload, generateQrDataUrl, splitIntoQrChunks } from "../services/qrSharing";
+import { getSongById } from "../services/songService";
+import type { Setlist, Song } from "../types";
 
 interface ShareQrModalProps {
   isOpen: boolean;
@@ -13,7 +14,8 @@ interface ShareQrModalProps {
 type ShareMode = "qr" | "code";
 
 export const ShareQrModal: React.FC<ShareQrModalProps> = ({ isOpen, setlist, onClose }) => {
-  const [qrUrl, setQrUrl] = useState<string>("");
+  const [qrUrls, setQrUrls] = useState<string[]>([]);
+  const [pageIdx, setPageIdx] = useState(0);
   const [payload, setPayload] = useState<string>("");
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
@@ -27,19 +29,32 @@ export const ShareQrModal: React.FC<ShareQrModalProps> = ({ isOpen, setlist, onC
     if (isOpen && setlist) {
       if (setlist.items.length === 0) {
         setIsGenerating(false);
-        setQrUrl("");
+        setQrUrls([]);
+        setPageIdx(0);
         setPayload("");
         return;
       }
       (async () => {
         setIsGenerating(true);
-        const code = await encodeSetlistToPayload(setlist.name, setlist.items);
+        const fullSongs: Song[] = [];
+        for (const item of setlist.items) {
+          const s = await getSongById(item.songId);
+          if (s) {
+            fullSongs.push(s);
+          }
+        }
+        const code = await encodeSetlistToPayload(setlist.name, setlist.items, fullSongs);
         if (isCancelled) return;
         setPayload(code);
-        const url = await generateQrDataUrl(code);
-        if (isCancelled) return;
-        setQrUrl(url);
-        setMode(url === "" ? "code" : "qr");
+        const pages = splitIntoQrChunks(code);
+        const urls: string[] = [];
+        for (const page of pages) {
+          urls.push(await generateQrDataUrl(page));
+          if (isCancelled) return;
+        }
+        setQrUrls(urls);
+        setPageIdx(0);
+        setMode(urls.some((u) => u === "") ? "code" : "qr");
         setIsGenerating(false);
       })().catch(() => {
         if (isCancelled) return;
@@ -47,7 +62,8 @@ export const ShareQrModal: React.FC<ShareQrModalProps> = ({ isOpen, setlist, onC
         setMode("code");
       });
     } else {
-      setQrUrl("");
+      setQrUrls([]);
+      setPageIdx(0);
       setPayload("");
       setCopied(false);
       setCopyFailed(false);
@@ -63,7 +79,8 @@ export const ShareQrModal: React.FC<ShareQrModalProps> = ({ isOpen, setlist, onC
 
   const songCount = setlist.items.length;
   const isListEmpty = songCount === 0;
-  const isQrAvailable = qrUrl !== "" || isGenerating;
+  const pageCount = qrUrls.length;
+  const isQrAvailable = (qrUrls[0] !== "" && qrUrls.length > 0) || isGenerating;
 
   const handleCopy = async () => {
     try {
@@ -174,17 +191,44 @@ export const ShareQrModal: React.FC<ShareQrModalProps> = ({ isOpen, setlist, onC
                     </div>
                   ) : (
                     <img
-                      src={qrUrl}
-                      alt="Código para compartilhar a lista"
+                      src={qrUrls[pageIdx]}
+                      alt={`Código para compartilhar a lista, página ${pageIdx + 1} de ${pageCount}`}
                       className="max-w-[240px] w-full aspect-square object-contain rounded-lg mx-auto"
                     />
                   )}
                 </div>
 
+                {pageCount > 1 && !isGenerating && (
+                  <div className="flex items-center justify-center gap-3">
+                    <button
+                      onClick={() => setPageIdx((p) => Math.max(0, p - 1))}
+                      disabled={pageIdx === 0}
+                      aria-label="Código anterior"
+                      className="w-9 h-9 flex items-center justify-center rounded-full bg-[var(--color-bg-subtle)] border border-[var(--color-border-subtle)] text-[var(--color-text-primary)] emil-press disabled:opacity-40"
+                    >
+                      <ChevronLeft className="w-4 h-4 shrink-0" />
+                    </button>
+                    <span className="text-xs font-bold text-[var(--color-text-primary)] font-mono tnum">
+                      Código {pageIdx + 1} de {pageCount}
+                    </span>
+                    <button
+                      onClick={() => setPageIdx((p) => Math.min(pageCount - 1, p + 1))}
+                      disabled={pageIdx === pageCount - 1}
+                      aria-label="Próximo código"
+                      className="w-9 h-9 flex items-center justify-center rounded-full bg-[var(--color-bg-subtle)] border border-[var(--color-border-subtle)] text-[var(--color-text-primary)] emil-press disabled:opacity-40"
+                    >
+                      <ChevronRight className="w-4 h-4 shrink-0" />
+                    </button>
+                  </div>
+                )}
+
                 <p className="text-xs text-[var(--color-text-secondary)] leading-relaxed text-left">
                   <strong className="text-[var(--color-text-primary)]">Como usar:</strong> no outro
                   celular, abra este aplicativo, toque em <strong>Listas</strong> e depois em{" "}
                   <strong>Escanear QR</strong>. A câmera vai ler este código.
+                  {pageCount > 1 && !isGenerating && (
+                    <> Mostre cada código em sequência, do 1 até o {pageCount}.</>
+                  )}
                 </p>
 
                 <button

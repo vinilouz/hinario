@@ -96,6 +96,65 @@ export async function decodePayloadToSetlist(
   }
 }
 
+// One QR at 240px render stays scannable only at modest versions, so a full
+// setlist with embedded cifras ships as numbered pages, not one giant code.
+// 1200 chars/chunk lands around version 22 at ECC M (~2.2px/module).
+export const QR_CHUNK_BUDGET = 1200;
+
+interface QrChunk {
+  v: 3;
+  i: number;
+  t: number;
+  d: string;
+}
+
+export function splitIntoQrChunks(payload: string): string[] {
+  if (payload.length <= QR_CHUNK_BUDGET) return [payload];
+  const total = Math.ceil(payload.length / QR_CHUNK_BUDGET);
+  const chunks: string[] = [];
+  for (let i = 0; i < total; i++) {
+    const envelope: QrChunk = {
+      v: 3,
+      i,
+      t: total,
+      d: payload.slice(i * QR_CHUNK_BUDGET, (i + 1) * QR_CHUNK_BUDGET)
+    };
+    chunks.push(JSON.stringify(envelope));
+  }
+  return chunks;
+}
+
+export function parseQrChunk(text: string): QrChunk | null {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      (parsed as QrChunk).v === 3 &&
+      typeof (parsed as QrChunk).d === "string" &&
+      typeof (parsed as QrChunk).i === "number" &&
+      typeof (parsed as QrChunk).t === "number"
+    ) {
+      return parsed as QrChunk;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export function joinQrChunks(texts: string[]): string | null {
+  const chunks = texts.map(parseQrChunk);
+  if (chunks.some((c) => c === null)) return null;
+  const total = (chunks[0] as QrChunk).t;
+  if (total <= 0 || chunks.length !== total) return null;
+  const ordered = [...(chunks as QrChunk[])].sort((a, b) => a.i - b.i);
+  for (let i = 0; i < total; i++) {
+    if (ordered[i].i !== i || ordered[i].t !== total) return null;
+  }
+  return ordered.map((c) => c.d).join("");
+}
+
 export async function generateQrDataUrl(payload: string): Promise<string> {
   try {
     return await QRCode.toDataURL(payload, {
