@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
-import { X, Camera, Clipboard, AlertCircle, CheckCircle2 } from "lucide-react";
+import { X, Camera, Clipboard, AlertCircle, CheckCircle2, Play, Trash2 } from "lucide-react";
 import { Html5Qrcode } from "html5-qrcode";
-import { decodePayloadToSetlist, parseQrChunk, joinQrChunks } from "../services/qrSharing";
+import { decodeTransfer } from "../services/qrSharing";
+import { saveSong } from "../services/songService";
 import { useSetlists } from "../context/SetlistListsContext";
+import { QR_TEXT_SEPARATOR } from "./ShareQrModal";
 import type { Song } from "../types";
 
 interface ScanQrModalProps {
@@ -11,144 +13,218 @@ interface ScanQrModalProps {
   onClose: () => void;
 }
 
-interface DecodedSetlist {
-  name: string;
-  items: { songId: string; customKey: string }[];
-  songs?: Song[];
+interface PendingTransfer {
+  n: string;
+  t: number;
+  k: string[];
+  r: number[];
 }
 
+interface ListCode {
+  n: string;
+  t: number;
+  i: number;
+  k: string;
+  song: Song;
+}
+
+const PENDING_KEY = "hinario_pending_transfer";
+
+const readPending = (): PendingTransfer | null => {
+  const raw = localStorage.getItem(PENDING_KEY);
+  if (raw === null) return null;
+  const parsed: unknown = JSON.parse(raw);
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const candidate = parsed as Partial<PendingTransfer>;
+  const keys = candidate.k;
+  const received = candidate.r;
+  if (
+    typeof candidate.n !== "string" ||
+    typeof candidate.t !== "number" ||
+    !Array.isArray(keys) ||
+    !Array.isArray(received) ||
+    keys.some((v) => typeof v !== "string") ||
+    received.some((v) => typeof v !== "number")
+  ) {
+    return null;
+  }
+  return { n: candidate.n, t: candidate.t, k: keys, r: received };
+};
+
+const writePending = (pending: PendingTransfer) => {
+  localStorage.setItem(PENDING_KEY, JSON.stringify(pending));
+};
+
+const clearPending = () => {
+  localStorage.removeItem(PENDING_KEY);
+};
+
 export const ScanQrModal: React.FC<ScanQrModalProps> = ({ isOpen, onClose }) => {
-  const { importSetlist, canCreateMore } = useSetlists();
+  const { importSetlist } = useSetlists();
   const [activeTab, setActiveTab] = useState<"camera" | "paste">(() =>
     window.matchMedia("(min-width: 640px)").matches ? "paste" : "camera"
   );
   const [pastedCode, setPastedCode] = useState("");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
-  const [scannedData, setScannedData] = useState<DecodedSetlist | null>(null);
-  const [chunkProgress, setChunkProgress] = useState<{ got: number; total: number } | null>(null);
-  const chunksRef = useRef<Map<number, string>>(new Map());
-
-  const resetChunks = () => {
-    chunksRef.current.clear();
-    setChunkProgress(null);
-  };
+  const [pending, setPending] = useState<PendingTransfer | null>(null);
+  const [showResume, setShowResume] = useState(false);
+  const [conflict, setConflict] = useState<ListCode | null>(null);
+  const receivedSongsRef = useRef<Map<number, Song>>(new Map());
 
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const isScanningRef = useRef<boolean>(false);
+  const isBusyRef = useRef<boolean>(false);
 
   const stopScanner = async () => {
     if (scannerRef.current && isScanningRef.current) {
       try {
         await scannerRef.current.stop();
-      } catch (err) {
-        console.warn("Error stopping scanner:", err);
+      } catch {
+        isScanningRef.current = false;
       }
       try {
         await scannerRef.current.clear();
-      } catch (err) {
-        console.warn("Error clearing scanner:", err);
+      } catch {
+        isScanningRef.current = false;
       }
       isScanningRef.current = false;
     }
   };
 
-  const handleProcessCode = async (code: string) => {
+  const discardPending = () => {
+    clearPending();
+    setPending(null);
+    receivedSongsRef.current.clear();
+  };
+
+  const finishTransfer = async (state: PendingTransfer) => {
+    const items: { songId: string; customKey: string }[] = [];
+    for (let i = 0; i < state.t; i++) {
+      const song = receivedSongsRef.current.get(i);
+      if (song === undefined) {
+        setErrorMsg(
+          `Mostre de novo o código da música ${i + 1} para fechar a lista "${state.n}".`
+        );
+        return;
+      }
+      items.push({ songId: song.id, customKey: state.k[i] });
+    }
+    const result = await importSetlist(state.n, items, "new");
+    clearPending();
+    setPending(null);
+    receivedSongsRef.current.clear();
+    if (!result.success) {
+      setErrorMsg(result.message || "Erro ao montar a lista.");
+      return;
+    }
+    setSuccessMsg(`Lista "${state.n}" pronta com ${items.length} músicas offline!`);
+    setTimeout(() => onClose(), 1400);
+  };
+
+  const acceptListCode = async (code: ListCode) => {
+    const base = pending !== null && pending.n === code.n ? pending : { n: code.n, t: code.t, k: [], r: [] };
+    if (base.r.includes(code.i)) return;
+    await saveSong(code.song);
+    receivedSongsRef.current.set(code.i, code.song);
+    const keys = Array.from({ length: base.t }, (_, index) => base.k[index] ?? "");
+    keys[code.i] = code.k;
+    const next: PendingTransfer = { n: base.n, t: base.t, k: keys, r: [...base.r, code.i] };
+    writePending(next);
+    setPending(next);
+    if (next.r.length === next.t) {
+      await finishTransfer(next);
+    }
+  };
+
+  const handleCodes = async (raw: string) => {
     setErrorMsg(null);
-    const chunk = parseQrChunk(code);
-    if (chunk) {
-      chunksRef.current.set(chunk.i, code);
-      if (chunksRef.current.size < chunk.t) {
-        setChunkProgress({ got: chunksRef.current.size, total: chunk.t });
-        return;
-      }
-      const joined = joinQrChunks([...chunksRef.current.values()]);
-      resetChunks();
-      if (!joined) {
-        setErrorMsg("Falha ao juntar as páginas do código. Escaneie a sequência de novo.");
-        return;
-      }
-      const decoded = await decodePayloadToSetlist(joined);
-      if (!decoded) {
+    setSuccessMsg(null);
+    const segments = raw
+      .split(QR_TEXT_SEPARATOR)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    for (const segment of segments) {
+      const decoded = await decodeTransfer(segment);
+      if (decoded === null) {
         setErrorMsg("QR Code ou código inválido. Verifique se copiou o código completo.");
         return;
       }
-      setScannedData(decoded);
-      await stopScanner();
-      return;
+      if (decoded.kind === "song") {
+        await saveSong(decoded.song);
+        setSuccessMsg(`Música "${decoded.song.title}" salva no aplicativo.`);
+        continue;
+      }
+      const code: ListCode = {
+        n: decoded.n,
+        t: decoded.t,
+        i: decoded.i,
+        k: decoded.k,
+        song: decoded.song
+      };
+      if (pending !== null && pending.n !== code.n) {
+        setConflict(code);
+        return;
+      }
+      await acceptListCode(code);
     }
-    const decoded = await decodePayloadToSetlist(code);
-    if (!decoded) {
-      setErrorMsg("QR Code ou código inválido. Verifique se copiou o código completo.");
-      return;
-    }
-    setScannedData(decoded);
-    await stopScanner();
   };
 
   useEffect(() => {
     if (!isOpen) {
       stopScanner();
-      resetChunks();
-      setScannedData(null);
       setErrorMsg(null);
       setSuccessMsg(null);
       setPastedCode("");
+      setConflict(null);
+      const restored = readPending();
+      setPending(restored);
+      setShowResume(restored !== null);
       return;
     }
+    setPending(readPending());
+  }, [isOpen]);
 
-    if (activeTab === "camera" && !scannedData) {
-      const qrRegionId = "qr-reader-region";
-      const html5QrCode = new Html5Qrcode(qrRegionId);
-      scannerRef.current = html5QrCode;
+  useEffect(() => {
+    if (!isOpen || activeTab !== "camera" || showResume || conflict !== null) return;
 
-      html5QrCode
-        .start(
-          { facingMode: "environment" },
-          {
-            fps: 10,
-            qrbox: { width: 220, height: 220 }
-          },
-          (decodedText) => {
-            handleProcessCode(decodedText);
-          },
-          () => {}
-        )
-        .then(() => {
-          isScanningRef.current = true;
-        })
-        .catch((err) => {
-          console.warn("Camera access issue:", err);
-          setErrorMsg("Não foi possível acessar a câmera. Você pode colar o código abaixo.");
-          setActiveTab("paste");
-        });
-    }
+    const html5QrCode = new Html5Qrcode("qr-reader-region");
+    scannerRef.current = html5QrCode;
+
+    html5QrCode
+      .start(
+        { facingMode: "environment" },
+        { fps: 10, qrbox: { width: 220, height: 220 } },
+        (decodedText) => {
+          if (isBusyRef.current) return;
+          isBusyRef.current = true;
+          handleCodes(decodedText)
+            .catch(() => {
+              setErrorMsg("Não deu para ler este código. Aponte de novo para ele.");
+            })
+            .finally(() => {
+              isBusyRef.current = false;
+            });
+        },
+        () => {}
+      )
+      .then(() => {
+        isScanningRef.current = true;
+      })
+      .catch(() => {
+        setErrorMsg("Não foi possível acessar a câmera. Você pode colar o código abaixo.");
+        setActiveTab("paste");
+      });
 
     return () => {
       stopScanner();
     };
-  }, [isOpen, activeTab, scannedData]);
+  }, [isOpen, activeTab, showResume, conflict]);
 
   if (!isOpen) return null;
   if (typeof document === "undefined") return null;
 
-  const handleConfirmImport = async (mode: "new" | "replace") => {
-    if (!scannedData) return;
-    const result = await importSetlist(scannedData.name, scannedData.items, mode, scannedData.songs);
-    if (result.success) {
-      const count = scannedData.songs?.length || 0;
-      setSuccessMsg(
-        count > 0
-          ? `Lista "${scannedData.name}" e ${count} ${count === 1 ? 'música importada' : 'músicas importadas'} offline!`
-          : `Lista "${scannedData.name}" sincronizada com sucesso!`
-      );
-      setTimeout(() => {
-        onClose();
-      }, 1200);
-    } else {
-      setErrorMsg(result.message || "Erro ao importar lista.");
-    }
-  };
+  const progress = pending !== null ? { got: pending.r.length, total: pending.t } : null;
 
   return createPortal(
     <div
@@ -160,74 +236,101 @@ export const ScanQrModal: React.FC<ScanQrModalProps> = ({ isOpen, onClose }) => 
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-[var(--color-border-subtle)] pb-3">
-          <div className="flex items-center gap-2">
-            <h2 className="text-sm sm:text-base font-bold text-[var(--color-text-primary)] leading-tight">
-              Escanear Lista de Culto
-            </h2>
-          </div>
+          <h2 className="text-sm sm:text-base font-bold text-[var(--color-text-primary)] leading-tight">
+            Receber Músicas
+          </h2>
           <button
             onClick={onClose}
-            className="w-8 h-8 flex items-center justify-center rounded-full text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-subtle)] emil-press"
+            aria-label="Fechar"
+            className="w-8 h-8 flex items-center justify-center rounded-full text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-subtle)] emil-press shrink-0"
           >
             <X className="w-4 h-4 shrink-0" />
           </button>
         </div>
 
-        {successMsg ? (
-          <div className="p-8 text-center space-y-3">
-            <CheckCircle2 className="w-12 h-12 text-[var(--color-accent)] mx-auto animate-bounce" />
-            <p className="text-sm font-bold text-[var(--color-text-primary)]">{successMsg}</p>
-          </div>
-        ) : scannedData ? (
+        {showResume && pending !== null ? (
           <div className="space-y-4 animate-ui-fade">
             <div className="p-4 rounded-2xl bg-[var(--color-bg-subtle)] border border-[var(--color-border-subtle)] space-y-1.5 text-center">
               <span className="text-[11px] font-mono text-[var(--color-accent)] uppercase font-bold tracking-wider">
-                Lista Detectada:
+                Transferência pela metade
               </span>
-              <h3 className="text-lg font-black text-[var(--color-text-primary)] leading-tight">{scannedData.name}</h3>
+              <h3 className="text-lg font-black text-[var(--color-text-primary)] leading-tight">
+                {pending.n}
+              </h3>
               <p className="text-xs text-[var(--color-text-secondary)] font-mono tnum">
-                {scannedData.items.length} {scannedData.items.length === 1 ? "louvor" : "louvores"} com tons pré-definidos
+                Recebidas {pending.r.length} de {pending.t} músicas
               </p>
-              {scannedData.songs && scannedData.songs.length > 0 && (
-                <div className="inline-block px-2.5 py-1 rounded-full bg-[var(--color-accent)]/15 text-[var(--color-accent)] text-xs font-bold mt-1">
-                  {scannedData.songs.length} {scannedData.songs.length === 1 ? "cifra completa inclusa" : "cifras completas inclusas"}
-                </div>
-              )}
             </div>
-
-            {errorMsg && (
-              <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-600 flex items-center gap-2">
-                <AlertCircle className="w-4 h-4 shrink-0" />
-                <span>{errorMsg}</span>
-              </div>
-            )}
-
-            <div className="flex flex-col gap-2 pt-1">
+            <p className="text-xs text-[var(--color-text-secondary)] leading-relaxed text-left">
+              As {pending.r.length} músicas já lidas estão salvas neste celular. Continue de onde a
+              outra pessoa parou.
+            </p>
+            <div className="flex flex-col gap-2">
               <button
-                onClick={() => handleConfirmImport("new")}
-                disabled={!canCreateMore}
-                className="w-full h-9 flex items-center justify-center rounded-full bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] emil-press text-[var(--color-accent-contrast)] text-xs font-bold shadow-md shadow-[var(--color-accent)]/20 disabled:opacity-40"
+                onClick={() => setShowResume(false)}
+                className="w-full h-10 flex items-center justify-center gap-1.5 rounded-full bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-[var(--color-accent-contrast)] text-xs font-bold emil-press shadow-md shadow-[var(--color-accent)]/20"
               >
-                Salvar como Nova Lista
+                <Play className="w-4 h-4 shrink-0" />
+                <span>Continuar</span>
               </button>
-
-              <button
-                onClick={() => handleConfirmImport("replace")}
-                className="w-full h-9 flex items-center justify-center rounded-full bg-[var(--color-bg-subtle)] border border-[var(--color-border-subtle)] hover:bg-[var(--color-bg-card)] emil-press text-[var(--color-text-primary)] text-xs font-semibold"
-              >
-                Substituir Lista Aberta
-              </button>
-
               <button
                 onClick={() => {
-                  resetChunks();
-                  setScannedData(null);
+                  discardPending();
+                  setShowResume(false);
                 }}
-                className="w-full h-8 flex items-center justify-center text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] emil-press"
+                className="w-full h-9 flex items-center justify-center gap-1.5 rounded-full bg-[var(--color-bg-subtle)] border border-[var(--color-border-subtle)] hover:bg-[var(--color-bg-card)] text-[var(--color-text-primary)] text-xs font-semibold emil-press"
               >
-                Escanear Outra
+                <Trash2 className="w-4 h-4 shrink-0" />
+                <span>Descartar e recomeçar</span>
               </button>
             </div>
+          </div>
+        ) : conflict !== null ? (
+          <div className="space-y-4 animate-ui-fade">
+            <div className="p-4 rounded-2xl bg-[var(--color-bg-subtle)] border border-[var(--color-border-subtle)] space-y-1.5 text-center">
+              <h3 className="text-base font-black text-[var(--color-text-primary)] leading-tight">
+                Outra lista começou
+              </h3>
+              <p className="text-xs text-[var(--color-text-secondary)] leading-relaxed">
+                {pending !== null && (
+                  <>
+                    Você está recebendo <strong>{pending.n}</strong> e agora chegou{" "}
+                    <strong>{conflict.n}</strong>.
+                  </>
+                )}
+                Duas listas não podem se misturar. Começar de novo apaga o progresso da anterior.
+              </p>
+            </div>
+            <div className="flex flex-col gap-2">
+              <button
+                onClick={async () => {
+                  const incoming = conflict;
+                  discardPending();
+                  setConflict(null);
+                  await acceptListCode(incoming);
+                }}
+                className="w-full h-10 flex items-center justify-center rounded-full bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-[var(--color-accent-contrast)] text-xs font-bold emil-press shadow-md shadow-[var(--color-accent)]/20"
+              >
+                Começar {conflict.n}
+              </button>
+              <button
+                onClick={() => setConflict(null)}
+                className="w-full h-9 flex items-center justify-center rounded-full bg-[var(--color-bg-subtle)] border border-[var(--color-border-subtle)] hover:bg-[var(--color-bg-card)] text-[var(--color-text-primary)] text-xs font-semibold emil-press"
+              >
+                Manter a lista atual
+              </button>
+            </div>
+          </div>
+        ) : successMsg !== null && progress === null ? (
+          <div className="p-8 text-center space-y-3">
+            <CheckCircle2 className="w-12 h-12 text-[var(--color-accent)] mx-auto" />
+            <p className="text-sm font-bold text-[var(--color-text-primary)]">{successMsg}</p>
+            <button
+              onClick={() => setSuccessMsg(null)}
+              className="w-full h-10 rounded-full bg-[var(--color-bg-subtle)] border border-[var(--color-border-subtle)] hover:bg-[var(--color-bg-card)] text-xs font-semibold text-[var(--color-text-primary)] emil-press"
+            >
+              Continuar recebendo
+            </button>
           </div>
         ) : (
           <div className="space-y-4">
@@ -256,22 +359,48 @@ export const ScanQrModal: React.FC<ScanQrModalProps> = ({ isOpen, onClose }) => 
               </button>
             </div>
 
+            {progress !== null && (
+              <div className="px-3.5 py-2.5 rounded-2xl bg-[var(--color-accent)]/10 border border-[var(--color-accent)]/25 flex items-center gap-2.5">
+                <div className="min-w-0">
+                  <p className="text-xs font-bold text-[var(--color-text-primary)] truncate">
+                    {pending?.n}
+                  </p>
+                  <p className="text-[11px] text-[var(--color-text-secondary)] font-mono tnum">
+                    Recebidas {progress.got} de {progress.total} músicas
+                  </p>
+                </div>
+                <button
+                  onClick={() => setShowResume(true)}
+                  className="ml-auto h-8 px-3 flex items-center justify-center rounded-full bg-[var(--color-bg-card)] border border-[var(--color-border-subtle)] text-[11px] font-semibold text-[var(--color-text-primary)] emil-press shrink-0"
+                >
+                  Retomar
+                </button>
+              </div>
+            )}
+
             {activeTab === "camera" && (
-              <p className="text-xs text-[var(--color-text-secondary)] text-left leading-relaxed">
-                Aponte a câmera para o código na tela do outro celular.
-                {chunkProgress && (
-                  <>
-                    {" "}Recebidos {chunkProgress.got} de {chunkProgress.total} — continue
-                    apontando para os próximos códigos.
-                  </>
-                )}
-              </p>
+              <div className="space-y-2 text-left">
+                <p className="text-xs text-[var(--color-text-secondary)] leading-relaxed">
+                  Aponte a câmera para o código na tela do outro celular.
+                </p>
+                <p className="text-xs text-[var(--color-text-secondary)] leading-relaxed">
+                  Se a tela do outro celular apagar, ela volta sozinha e continua de onde parou.
+                  Cada música é salva assim que é lida, então nada se perde.
+                </p>
+              </div>
             )}
 
             {errorMsg && (
               <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-600 flex items-center gap-2">
                 <AlertCircle className="w-4 h-4 shrink-0" />
                 <span>{errorMsg}</span>
+              </div>
+            )}
+
+            {successMsg !== null && (
+              <div className="p-3 rounded-xl bg-[var(--color-accent)]/10 border border-[var(--color-accent)]/25 text-xs text-[var(--color-text-primary)] flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 shrink-0 text-[var(--color-accent)]" />
+                <span>{successMsg}</span>
               </div>
             )}
 
@@ -289,15 +418,19 @@ export const ScanQrModal: React.FC<ScanQrModalProps> = ({ isOpen, onClose }) => 
                   className="w-full px-3.5 py-2.5 bg-[var(--color-bg-subtle)] border border-[var(--color-border-subtle)] rounded-2xl text-xs sm:text-sm text-[var(--color-text-primary)] placeholder-[var(--color-text-secondary)] focus:outline-none focus:border-[var(--color-accent)] font-mono"
                 />
                 <button
-                  onClick={() => handleProcessCode(pastedCode)}
+                  onClick={async () => {
+                    await handleCodes(pastedCode);
+                    setPastedCode("");
+                  }}
                   disabled={!pastedCode.trim()}
                   className="w-full h-11 flex items-center justify-center rounded-full bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-[var(--color-accent-contrast)] text-sm font-bold emil-press disabled:opacity-40 shadow-md shadow-[var(--color-accent)]/20"
                 >
-                  Receber lista
+                  Receber
                 </button>
               </div>
             )}
-          </div>
+
+            </div>
         )}
       </div>
     </div>,

@@ -1,19 +1,24 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { X, Copy, Check, QrCode, Share2, Send, ChevronLeft, ChevronRight } from "lucide-react";
-import { encodeSetlistToPayload, generateQrDataUrl, splitIntoQrChunks } from "../services/qrSharing";
+import { encodeSongTransfer, encodeSetlistTransfer, generateQrDataUrl } from "../services/qrSharing";
 import { getSongById } from "../services/songService";
 import type { Setlist, Song } from "../types";
+
+export const QR_TEXT_SEPARATOR = "\n---\n";
 
 interface ShareQrModalProps {
   isOpen: boolean;
   setlist: Setlist | null;
+  song?: Song;
   onClose: () => void;
 }
 
 type ShareMode = "qr" | "code";
 
-export const ShareQrModal: React.FC<ShareQrModalProps> = ({ isOpen, setlist, onClose }) => {
+const SWIPE_THRESHOLD_PX = 40;
+
+export const ShareQrModal: React.FC<ShareQrModalProps> = ({ isOpen, setlist, song, onClose }) => {
   const [qrUrls, setQrUrls] = useState<string[]>([]);
   const [pageIdx, setPageIdx] = useState(0);
   const [payload, setPayload] = useState<string>("");
@@ -21,66 +26,108 @@ export const ShareQrModal: React.FC<ShareQrModalProps> = ({ isOpen, setlist, onC
   const [copyFailed, setCopyFailed] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [mode, setMode] = useState<ShareMode>("qr");
+  const touchStartXRef = useRef<number | null>(null);
 
   const canUseNativeShare = typeof navigator.share === "function";
+  const isSongMode = song !== undefined;
+  const title = isSongMode ? song.title : setlist?.name;
+  const songCount = isSongMode ? 1 : (setlist?.items.length ?? 0);
 
   useEffect(() => {
     let isCancelled = false;
-    if (isOpen && setlist) {
-      if (setlist.items.length === 0) {
-        setIsGenerating(false);
-        setQrUrls([]);
-        setPageIdx(0);
-        setPayload("");
-        return;
-      }
-      (async () => {
-        setIsGenerating(true);
-        const fullSongs: Song[] = [];
-        for (const item of setlist.items) {
-          const s = await getSongById(item.songId);
-          if (s) {
-            fullSongs.push(s);
-          }
-        }
-        const code = await encodeSetlistToPayload(setlist.name, setlist.items, fullSongs);
-        if (isCancelled) return;
-        setPayload(code);
-        const pages = splitIntoQrChunks(code);
-        const urls: string[] = [];
-        for (const page of pages) {
-          urls.push(await generateQrDataUrl(page, pages.length > 1 ? "L" : undefined));
-          if (isCancelled) return;
-        }
-        setQrUrls(urls);
-        setPageIdx(0);
-        setMode(urls.some((u) => u === "") ? "code" : "qr");
-        setIsGenerating(false);
-      })().catch(() => {
-        if (isCancelled) return;
-        setIsGenerating(false);
-        setMode("code");
-      });
-    } else {
+    const reset = () => {
       setQrUrls([]);
       setPageIdx(0);
       setPayload("");
       setCopied(false);
       setCopyFailed(false);
       setIsGenerating(false);
+    };
+
+    if (isOpen && isSongMode) {
+      (async () => {
+        setIsGenerating(true);
+        const code = await encodeSongTransfer(song);
+        const url = await generateQrDataUrl(code, "L");
+        if (isCancelled) return;
+        setPayload(code);
+        setQrUrls([url]);
+        setPageIdx(0);
+        setIsGenerating(false);
+      })().catch(() => {
+        if (isCancelled) return;
+        setIsGenerating(false);
+        setMode("code");
+      });
+      return () => {
+        isCancelled = true;
+      };
     }
+
+    if (isOpen && setlist) {
+      if (setlist.items.length === 0) {
+        reset();
+        return;
+      }
+      (async () => {
+        setIsGenerating(true);
+        const entries: { customKey: string; song: Song }[] = [];
+        for (const item of setlist.items) {
+          const s = await getSongById(item.songId);
+          if (s) {
+            entries.push({ customKey: item.customKey, song: s });
+          }
+        }
+        const codes = await encodeSetlistTransfer(setlist.name, entries);
+        const urls: string[] = [];
+        for (const code of codes) {
+          urls.push(await generateQrDataUrl(code, "L"));
+          if (isCancelled) return;
+        }
+        setPayload(codes.join(QR_TEXT_SEPARATOR));
+        setQrUrls(urls);
+        setPageIdx(0);
+        setMode(urls.length === 0 ? "code" : "qr");
+        setIsGenerating(false);
+      })().catch(() => {
+        if (isCancelled) return;
+        setIsGenerating(false);
+        setMode("code");
+      });
+      return () => {
+        isCancelled = true;
+      };
+    }
+
+    reset();
     return () => {
       isCancelled = true;
     };
-  }, [isOpen, setlist]);
+  }, [isOpen, setlist, song, isSongMode]);
 
-  if (!isOpen || !setlist) return null;
+  if (!isOpen || title === undefined) return null;
   if (typeof document === "undefined") return null;
 
-  const songCount = setlist.items.length;
-  const isListEmpty = songCount === 0;
+  const isListEmpty = !isSongMode && songCount === 0;
   const pageCount = qrUrls.length;
-  const isQrAvailable = (qrUrls[0] !== "" && qrUrls.length > 0) || isGenerating;
+  const isQrAvailable = qrUrls.length > 0 && qrUrls[0] !== "";
+
+  const goToPage = (next: number) => {
+    setPageIdx(Math.max(0, Math.min(pageCount - 1, next)));
+  };
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    touchStartXRef.current = e.touches[0].clientX;
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    const startX = touchStartXRef.current;
+    touchStartXRef.current = null;
+    if (startX === null || pageCount < 2) return;
+    const delta = e.changedTouches[0].clientX - startX;
+    if (Math.abs(delta) < SWIPE_THRESHOLD_PX) return;
+    goToPage(delta < 0 ? pageIdx + 1 : pageIdx - 1);
+  };
 
   const handleCopy = async () => {
     try {
@@ -95,10 +142,7 @@ export const ShareQrModal: React.FC<ShareQrModalProps> = ({ isOpen, setlist, onC
 
   const handleNativeShare = async () => {
     try {
-      await navigator.share({
-        title: setlist.name,
-        text: payload
-      });
+      await navigator.share({ title, text: payload });
     } catch {
       setMode("code");
     }
@@ -120,10 +164,12 @@ export const ShareQrModal: React.FC<ShareQrModalProps> = ({ isOpen, setlist, onC
             </div>
             <div className="min-w-0">
               <h2 className="text-sm font-bold text-[var(--color-text-primary)] truncate max-w-[200px] leading-tight">
-                {setlist.name}
+                {title}
               </h2>
               <p className="text-[11px] text-[var(--color-text-secondary)] font-mono tnum leading-none mt-0.5">
-                {songCount} {songCount === 1 ? "música" : "músicas"} • 100% Offline
+                {isSongMode
+                  ? "1 música • 100% Offline"
+                  : `${songCount} ${songCount === 1 ? "música" : "músicas"} • 100% Offline`}
               </p>
             </div>
           </div>
@@ -183,17 +229,25 @@ export const ShareQrModal: React.FC<ShareQrModalProps> = ({ isOpen, setlist, onC
 
             {mode === "qr" ? (
               <div className="space-y-3">
-                <div className="flex flex-col items-center justify-center p-3 bg-[#FFF8F0] rounded-2xl shadow-inner border border-[#8C5A3C]/30 min-h-[240px]">
+                <div
+                  className="flex flex-col items-center justify-center p-3 bg-[#FFF8F0] rounded-2xl shadow-inner border border-[#8C5A3C]/30 min-h-[240px]"
+                  onTouchStart={handleTouchStart}
+                  onTouchEnd={handleTouchEnd}
+                >
                   {isGenerating ? (
-                    <div className="max-w-[240px] w-full aspect-square flex flex-col items-center justify-center text-[var(--color-text-secondary)] text-xs mx-auto gap-2">
+                    <div className="w-full aspect-square flex flex-col items-center justify-center text-[var(--color-text-secondary)] text-xs mx-auto gap-2">
                       <div className="w-6 h-6 border-2 border-[var(--color-accent)] border-t-transparent rounded-full animate-spin" />
                       <span>Preparando o código...</span>
                     </div>
                   ) : (
                     <img
                       src={qrUrls[pageIdx]}
-                      alt={`Código para compartilhar a lista, página ${pageIdx + 1} de ${pageCount}`}
-                      className="max-w-[240px] w-full aspect-square object-contain rounded-lg mx-auto"
+                      alt={
+                        isSongMode
+                          ? `Código para compartilhar a música ${title}`
+                          : `Código para compartilhar a lista, música ${pageIdx + 1} de ${pageCount}`
+                      }
+                      className="w-full aspect-square object-contain rounded-lg mx-auto"
                     />
                   )}
                 </div>
@@ -201,20 +255,20 @@ export const ShareQrModal: React.FC<ShareQrModalProps> = ({ isOpen, setlist, onC
                 {pageCount > 1 && !isGenerating && (
                   <div className="flex items-center justify-center gap-3">
                     <button
-                      onClick={() => setPageIdx((p) => Math.max(0, p - 1))}
+                      onClick={() => goToPage(pageIdx - 1)}
                       disabled={pageIdx === 0}
-                      aria-label="Código anterior"
+                      aria-label="Música anterior"
                       className="w-9 h-9 flex items-center justify-center rounded-full bg-[var(--color-bg-subtle)] border border-[var(--color-border-subtle)] text-[var(--color-text-primary)] emil-press disabled:opacity-40"
                     >
                       <ChevronLeft className="w-4 h-4 shrink-0" />
                     </button>
                     <span className="text-xs font-bold text-[var(--color-text-primary)] font-mono tnum">
-                      Código {pageIdx + 1} de {pageCount}
+                      Música {pageIdx + 1} de {pageCount}
                     </span>
                     <button
-                      onClick={() => setPageIdx((p) => Math.min(pageCount - 1, p + 1))}
+                      onClick={() => goToPage(pageIdx + 1)}
                       disabled={pageIdx === pageCount - 1}
-                      aria-label="Próximo código"
+                      aria-label="Próxima música"
                       className="w-9 h-9 flex items-center justify-center rounded-full bg-[var(--color-bg-subtle)] border border-[var(--color-border-subtle)] text-[var(--color-text-primary)] emil-press disabled:opacity-40"
                     >
                       <ChevronRight className="w-4 h-4 shrink-0" />
@@ -222,13 +276,17 @@ export const ShareQrModal: React.FC<ShareQrModalProps> = ({ isOpen, setlist, onC
                   </div>
                 )}
 
+                {pageCount > 1 && !isGenerating && (
+                  <p className="text-[11px] text-[var(--color-text-secondary)] leading-relaxed text-left">
+                    Avance com as setas ou arrastando o dedo. Cada música é salva assim que a câmera
+                    lê, então dá para parar e voltar depois sem perder nada.
+                  </p>
+                )}
+
                 <p className="text-xs text-[var(--color-text-secondary)] leading-relaxed text-left">
                   <strong className="text-[var(--color-text-primary)]">Como usar:</strong> no outro
                   celular, abra este aplicativo, toque em <strong>Listas</strong> e depois em{" "}
                   <strong>Escanear QR</strong>. A câmera vai ler este código.
-                  {pageCount > 1 && !isGenerating && (
-                    <> Mostre cada código em sequência, do 1 até o {pageCount}.</>
-                  )}
                 </p>
 
                 <button
@@ -251,7 +309,7 @@ export const ShareQrModal: React.FC<ShareQrModalProps> = ({ isOpen, setlist, onC
                     readOnly
                     value={payload}
                     rows={3}
-                    aria-label="Código da lista para copiar"
+                    aria-label="Código para copiar"
                     className="w-full px-3 py-2 bg-[var(--color-bg-card)] border border-[var(--color-border-subtle)] rounded-xl text-[10px] text-[var(--color-text-secondary)] resize-none focus:outline-none font-mono break-all"
                   />
                 </div>
@@ -282,8 +340,8 @@ export const ShareQrModal: React.FC<ShareQrModalProps> = ({ isOpen, setlist, onC
 
                 {copyFailed && (
                   <p className="text-[11px] text-rose-600 leading-relaxed">
-                    O navegador não deixou copiar sozinho. Toque duas vezes no código acima e
-                    copie na mão.
+                    O navegador não deixou copiar sozinho. Toque duas vezes no código acima e copie
+                    na mão.
                   </p>
                 )}
 

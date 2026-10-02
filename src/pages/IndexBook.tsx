@@ -1,6 +1,7 @@
 import { useDragScroll } from "../hooks/useDragScroll";
 import React, { useState, useEffect, useMemo } from "react";
-import { Search, BookOpen, Star, X, Music, UserCheck } from "lucide-react";
+import { Search, BookOpen, Star, X, Music, UserCheck, Share2 } from "lucide-react";
+import { ShareQrModal } from "../components/ShareQrModal";
 import { getAllSongs } from "../services/songService";
 import { useSetlists } from "../context/SetlistListsContext";
 import type { Song, SongLeader } from "../types";
@@ -25,6 +26,7 @@ export const IndexBook: React.FC<IndexBookProps> = ({ onOpenSong }) => {
   const [query, setQuery] = useState("");
   const [selectedLetter, setSelectedLetter] = useState<string | null>(null);
   const [selectedLeader, setSelectedLeader] = useState<string>("all");
+  const [shareSong, setShareSong] = useState<Song | null>(null);
   const { ref: alphabetRef, handleClickCapture } = useDragScroll<HTMLDivElement>();
 
   useEffect(() => {
@@ -285,12 +287,30 @@ export const IndexBook: React.FC<IndexBookProps> = ({ onOpenSong }) => {
                   >
                     <Star className={`w-4 h-4 sm:w-5 sm:h-5 shrink-0 ${starred ? "fill-current" : ""}`} />
                   </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShareSong(song);
+                    }}
+                    title="Compartilhar esta música"
+                    aria-label={`Compartilhar a música ${song.title}`}
+                    className="w-10 h-10 sm:w-11 sm:h-11 flex items-center justify-center rounded-full bg-[var(--color-bg-subtle)] text-[var(--color-text-secondary)] hover:text-[var(--color-accent)] border border-[var(--color-border-subtle)] hover:bg-[var(--color-bg-card)] emil-press"
+                  >
+                    <Share2 className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" />
+                  </button>
                 </div>
               </div>
             );
           })
         )}
       </div>
+
+      <ShareQrModal
+        isOpen={shareSong !== null}
+        setlist={null}
+        song={shareSong ?? undefined}
+        onClose={() => setShareSong(null)}
+      />
     </div>
   );
 };
