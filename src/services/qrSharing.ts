@@ -1,6 +1,14 @@
 import QRCode from 'qrcode';
 import type { QrSetlistPayload, SetlistItem, Song } from '../types';
 
+// qrcode@1.5.4 byte-mode data capacity at version 40 (lib/core/version.js EC_CODEWORDS_TABLE):
+// L=2953, M=2331, Q=1663, H=1273. Above 2953 no version fits and toDataURL throws.
+const BYTE_CAPACITY_AT_M = 2331;
+
+export function pickErrorCorrectionLevel(payloadBytes: number): 'L' | 'M' {
+  return payloadBytes > BYTE_CAPACITY_AT_M ? 'L' : 'M';
+}
+
 export async function compressString(str: string): Promise<string> {
   if (typeof CompressionStream === 'undefined') {
     return btoa(unescape(encodeURIComponent(str)));
@@ -91,7 +99,7 @@ export async function decodePayloadToSetlist(
 export async function generateQrDataUrl(payload: string): Promise<string> {
   try {
     return await QRCode.toDataURL(payload, {
-      errorCorrectionLevel: payload.length > 600 ? 'L' : 'M',
+      errorCorrectionLevel: pickErrorCorrectionLevel(payload.length),
       margin: 2,
       color: {
         dark: '#1D1211',

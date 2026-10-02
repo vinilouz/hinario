@@ -19,7 +19,9 @@ interface DecodedSetlist {
 
 export const ScanQrModal: React.FC<ScanQrModalProps> = ({ isOpen, onClose }) => {
   const { importSetlist, canCreateMore } = useSetlists();
-  const [activeTab, setActiveTab] = useState<"camera" | "paste">("camera");
+  const [activeTab, setActiveTab] = useState<"camera" | "paste">(() =>
+    window.matchMedia("(min-width: 640px)").matches ? "paste" : "camera"
+  );
   const [pastedCode, setPastedCode] = useState("");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
@@ -158,7 +160,7 @@ export const ScanQrModal: React.FC<ScanQrModalProps> = ({ isOpen, onClose }) => 
               </p>
               {scannedData.songs && scannedData.songs.length > 0 && (
                 <div className="inline-block px-2.5 py-1 rounded-full bg-[var(--color-accent)]/15 text-[var(--color-accent)] text-xs font-bold mt-1">
-                  ✦ {scannedData.songs.length} {scannedData.songs.length === 1 ? "cifra completa inclusa" : "cifras completas inclusas"}
+                  {scannedData.songs.length} {scannedData.songs.length === 1 ? "cifra completa inclusa" : "cifras completas inclusas"}
                 </div>
               )}
             </div>
@@ -198,28 +200,34 @@ export const ScanQrModal: React.FC<ScanQrModalProps> = ({ isOpen, onClose }) => 
           <div className="space-y-4">
             <div className="flex items-center bg-[var(--color-bg-subtle)] border border-[var(--color-border-subtle)] p-1 rounded-full">
               <button
-                onClick={() => setActiveTab("camera")}
-                className={`flex-1 h-8 flex items-center justify-center gap-1.5 rounded-full text-xs font-bold emil-press ${
-                  activeTab === "camera"
-                    ? "bg-[var(--color-accent)] text-[var(--color-accent-contrast)] shadow-sm"
-                    : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
-                }`}
-              >
-                <Camera className="w-3.5 h-3.5 shrink-0" />
-                <span>Usar Câmera</span>
-              </button>
-              <button
                 onClick={() => setActiveTab("paste")}
-                className={`flex-1 h-8 flex items-center justify-center gap-1.5 rounded-full text-xs font-bold emil-press ${
+                className={`flex-1 h-9 flex items-center justify-center gap-1.5 rounded-full text-xs font-bold emil-press ${
                   activeTab === "paste"
                     ? "bg-[var(--color-accent)] text-[var(--color-accent-contrast)] shadow-sm"
                     : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
                 }`}
               >
-                <Clipboard className="w-3.5 h-3.5 shrink-0" />
-                <span>Colar Código</span>
+                <Clipboard className="w-4 h-4 shrink-0" />
+                <span>Colar código</span>
+              </button>
+              <button
+                onClick={() => setActiveTab("camera")}
+                className={`flex-1 h-9 flex items-center justify-center gap-1.5 rounded-full text-xs font-bold emil-press ${
+                  activeTab === "camera"
+                    ? "bg-[var(--color-accent)] text-[var(--color-accent-contrast)] shadow-sm"
+                    : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+                }`}
+              >
+                <Camera className="w-4 h-4 shrink-0" />
+                <span>Ler com a câmera</span>
               </button>
             </div>
+
+            {activeTab === "camera" && (
+              <p className="text-xs text-[var(--color-text-secondary)] text-left leading-relaxed">
+                Aponte a câmera para o código na tela do outro celular.
+              </p>
+            )}
 
             {errorMsg && (
               <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-600 flex items-center gap-2">
@@ -238,15 +246,15 @@ export const ScanQrModal: React.FC<ScanQrModalProps> = ({ isOpen, onClose }) => 
                   rows={4}
                   value={pastedCode}
                   onChange={(e) => setPastedCode(e.target.value)}
-                  placeholder="Cole aqui o código copiado do outro celular..."
+                  placeholder="Cole aqui o código que o outro celular enviou..."
                   className="w-full px-3.5 py-2.5 bg-[var(--color-bg-subtle)] border border-[var(--color-border-subtle)] rounded-2xl text-xs sm:text-sm text-[var(--color-text-primary)] placeholder-[var(--color-text-secondary)] focus:outline-none focus:border-[var(--color-accent)] font-mono"
                 />
                 <button
                   onClick={() => handleProcessCode(pastedCode)}
                   disabled={!pastedCode.trim()}
-                  className="w-full h-9 flex items-center justify-center rounded-full bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-[var(--color-accent-contrast)] text-xs font-bold emil-press disabled:opacity-40 shadow-sm"
+                  className="w-full h-11 flex items-center justify-center rounded-full bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-[var(--color-accent-contrast)] text-sm font-bold emil-press disabled:opacity-40 shadow-md shadow-[var(--color-accent)]/20"
                 >
-                  Carregar Lista
+                  Receber lista
                 </button>
               </div>
             )}

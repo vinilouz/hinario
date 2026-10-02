@@ -8,8 +8,8 @@ import {
   ChevronDown,
   Plus,
   BookOpen,
-  QrCode,
   Camera,
+  Share2,
   Edit2
 } from "lucide-react";
 import { useSetlists, MAX_SETLISTS } from "../context/SetlistListsContext";
@@ -108,30 +108,20 @@ export const SetlistsPage: React.FC<SetlistsPageProps> = ({
             )}
           </div>
           <p className="text-xs sm:text-sm text-[var(--color-text-secondary)] max-w-lg">
-            Compartilhe a lista com a banda toda via QR Code offline em segundos.
+            Toque em <strong className="text-[var(--color-text-primary)]">Compartilhar</strong> e
+            mostre o código para a banda. Sem internet, sem senha.
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto z-10">
           <button
             onClick={() => setIsScanModalOpen(true)}
-            className="h-9 px-3.5 flex items-center gap-1.5 rounded-full bg-[var(--color-bg-subtle)] hover:bg-[var(--color-bg-card)] border border-[var(--color-border-subtle)] emil-press text-xs font-bold text-[var(--color-text-primary)] shadow-sm"
-            title="Escanear QR Code de outro celular"
+            className="h-11 px-3.5 flex items-center gap-1.5 rounded-full bg-[var(--color-bg-subtle)] hover:bg-[var(--color-bg-card)] border border-[var(--color-border-subtle)] emil-press text-xs font-bold text-[var(--color-text-primary)] shadow-sm"
+            title="Ler o código de outro celular"
           >
-            <Camera className="w-4 h-4 text-[var(--color-accent)] shrink-0" />
-            <span>Escanear QR</span>
+            <Camera className="w-4 h-4 text-[var(--color-text-primary)] shrink-0" />
+            <span>Receber lista</span>
           </button>
-
-          {activeSetlist && activeItemsWithSongs.length > 0 && (
-            <button
-              onClick={() => setIsShareModalOpen(true)}
-              className="h-9 px-3.5 flex items-center gap-1.5 rounded-full bg-[var(--color-bg-subtle)] hover:bg-[var(--color-bg-card)] border border-[var(--color-border-subtle)] emil-press text-xs font-bold text-[var(--color-text-primary)] shadow-sm"
-              title="Gerar QR Code para a banda"
-            >
-              <QrCode className="w-4 h-4 text-[var(--color-accent)] shrink-0" />
-              <span>Criar QR Code</span>
-            </button>
-          )}
 
           {activeItemsWithSongs.length > 0 && (
             <button
@@ -149,13 +139,22 @@ export const SetlistsPage: React.FC<SetlistsPageProps> = ({
           )}
 
           <button
+            onClick={() => setIsShareModalOpen(true)}
+            className="flex-1 sm:flex-initial h-12 sm:h-14 px-7 flex items-center justify-center gap-2.5 rounded-full bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] emil-press text-[var(--color-accent-contrast)] text-base sm:text-lg font-black shadow-lg shadow-[var(--color-accent)]/30 border-2 border-[var(--color-accent-hover)]"
+            title="Compartilhar esta lista com a banda"
+          >
+            <Share2 className="w-5 h-5 shrink-0" />
+            <span>Compartilhar</span>
+          </button>
+
+          <button
             onClick={handleStartWorship}
             disabled={activeItemsWithSongs.length === 0}
-            className="flex-1 sm:flex-initial h-11 sm:h-12 px-6 flex items-center justify-center gap-2.5 rounded-full bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] emil-press text-[var(--color-accent-contrast)] font-bold text-base shadow-md shadow-[var(--color-accent)]/20 disabled:opacity-40 disabled:cursor-not-allowed"
+            className="flex-1 sm:flex-initial h-11 sm:h-12 px-6 flex items-center justify-center gap-2.5 rounded-full bg-[var(--color-bg-subtle)] hover:bg-[var(--color-bg-card)] border border-[var(--color-border-subtle)] emil-press text-[var(--color-text-primary)] text-sm font-bold shadow-sm disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            <Play className="w-4 h-4 fill-[var(--color-accent-contrast)] shrink-0" />
+            <Play className="w-4 h-4 fill-current shrink-0" />
             <span>Iniciar Culto</span>
-            <span className="px-2 py-0.5 rounded-full bg-[var(--color-accent-contrast)]/25 text-[var(--color-accent-contrast)] text-xs font-black font-mono tnum leading-none">
+            <span className="px-2 py-0.5 rounded-full bg-[var(--color-bg-card)] border border-[var(--color-border-subtle)] text-[var(--color-text-primary)] text-xs font-black font-mono tnum leading-none">
               {activeItemsWithSongs.length}
             </span>
           </button>
@@ -277,7 +276,8 @@ export const SetlistsPage: React.FC<SetlistsPageProps> = ({
           <div className="space-y-1">
             <h2 className="text-base font-bold text-[var(--color-text-primary)]">Lista Vazia</h2>
             <p className="text-xs sm:text-sm text-[var(--color-text-secondary)] max-w-md mx-auto">
-              Adicione músicas tocando na estrela ⭐ no Índice A-Z ou escaneie o QR Code compartilhado por outro músico.
+              Toque na estrela ao lado de cada música no Índice A-Z para adicionar, ou receba a lista
+              de outro músico tocando em Receber lista.
             </p>
           </div>
           <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
@@ -294,7 +294,7 @@ export const SetlistsPage: React.FC<SetlistsPageProps> = ({
               className="h-9 px-4 flex items-center gap-2 rounded-full bg-[var(--color-bg-subtle)] border border-[var(--color-border-subtle)] hover:bg-[var(--color-bg-card)] emil-press text-[var(--color-text-primary)] text-xs font-bold shadow-sm"
             >
               <Camera className="w-4 h-4 text-[var(--color-accent)] shrink-0" />
-              <span>Escanear QR Code</span>
+              <span>Receber lista</span>
             </button>
           </div>
         </div>
