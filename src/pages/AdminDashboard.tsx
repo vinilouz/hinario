@@ -8,33 +8,24 @@ import {
   X,
   Eye,
   RefreshCw,
-  Archive,
   Upload,
   CheckCircle2,
-  AlertCircle,
   FileText,
   Download
 } from 'lucide-react';
 import { db } from '../db/dexie';
-import { syncSongsWithRemote, SEED_ID_PREFIX } from '../db/sync';
 import {
   getAllSongs,
-  getDeletedSongs,
   getSongById,
   saveSong,
-  softDeleteSong
+  deleteSong,
+  SEED_ID_PREFIX
 } from '../services/songService';
 import { COMMON_KEYS, extractCifraClubKey, cleanCifraClubArtifacts, detectFormat } from '../services/chordEngine';
 import { ChordViewer } from '../components/ChordViewer';
 import type { Song, SongLeader } from '../types';
 
-interface AdminDashboardProps {
-  onNavigateToTrash: () => void;
-}
-
-export const AdminDashboard: React.FC<AdminDashboardProps> = ({
-  onNavigateToTrash
-}) => {
+export const AdminDashboard: React.FC = () => {
   const [songs, setSongs] = useState<Song[]>([]);
   const [isEditing, setIsEditing] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -60,11 +51,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const detectedFormat = useMemo(() => detectFormat(content), [content]);
   const resolvedFormat = formatMode === 'auto' ? detectedFormat : formatMode;
 
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [syncStatus, setSyncStatus] = useState<string | null>(null);
-  const [trashCount, setTrashCount] = useState(0);
-
-  const [isImporting, setIsImporting] = useState(false);
+const [isImporting, setIsImporting] = useState(false);
   const [importStatus, setImportStatus] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const backupInputRef = useRef<HTMLInputElement>(null);
@@ -116,9 +103,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const loadSongs = async () => {
     const active = await getAllSongs();
     setSongs(active.sort((a, b) => a.title.localeCompare(b.title, 'pt-BR')));
-
-    const deleted = await getDeletedSongs();
-    setTrashCount(deleted.length);
   };
 
   useEffect(() => {
@@ -179,9 +163,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       format: resolvedFormat,
       content: sanitizedContent,
       createdAt: existingSong?.createdAt || Date.now(),
-      updatedAt: Date.now(),
-      isDeleted: false,
-      deletedAt: null
+      updatedAt: Date.now()
     };
 
     await saveSong(songData);
@@ -191,26 +173,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const handleDelete = async (songId: string, songTitle: string) => {
     if (
-      window.confirm(
-        `Deseja mover "${songTitle}" para a lixeira? Ela ficará disponível para restauração por 30 dias.`
-      )
+      window.confirm(`Excluir "${songTitle}" definitivamente? Esta ação não pode ser desfeita.`)
     ) {
-      await softDeleteSong(songId);
+      await deleteSong(songId);
       await loadSongs();
-    }
-  };
-
-  const handleSync = async () => {
-    setIsSyncing(true);
-    setSyncStatus(null);
-    try {
-      await syncSongsWithRemote();
-      setSyncStatus('Sincronização com a nuvem concluída com sucesso!');
-      await loadSongs();
-    } catch (err: any) {
-      setSyncStatus(`Erro ao sincronizar: ${err?.message || 'Verifique conexão'}`);
-    } finally {
-      setIsSyncing(false);
     }
   };
 
@@ -274,9 +240,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           format: text.includes('[') && text.includes(']') ? 'chordpro' : 'chords-over-lyrics',
           content: cleanCifraClubArtifacts(text),
           createdAt: now + i * 1000,
-          updatedAt: now + i * 1000,
-          isDeleted: false,
-          deletedAt: null
+          updatedAt: now + i * 1000
         });
       } catch (err) {
         console.warn(`Erro ao ler arquivo ${file.name}:`, err);
@@ -311,7 +275,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
           <h1 className="text-2xl font-black text-[var(--color-text-primary)] mt-1">Acervo do Hinário</h1>
           <p className="text-xs sm:text-sm text-[var(--color-text-secondary)]">
-            Cadastre louvores, edite cifras por líder (Doni, Lucas, Magu, Igreja) ou sincronize com a nuvem.
+            Cadastre louvores, edite cifras por líder (Doni, Lucas, Magu, Igreja) ou importe arquivos TXT em lote.
           </p>
         </div>
 
@@ -365,58 +329,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             className="flex items-center gap-2 h-10 sm:h-11 px-3 sm:px-4 rounded-full bg-[var(--color-bg-subtle)] border border-[var(--color-border)]/25 hover:bg-[var(--color-bg-card)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] text-xs font-bold emil-press"
             title="Baixar backup JSON com músicas e setlists"
           >
-            <Download className="w-4 h-4" />
+<Download className="w-4 h-4" />
             <span className="hidden md:inline">Backup</span>
-          </button>
-
-          <button
-            onClick={handleSync}
-            disabled={isSyncing}
-            className="flex items-center gap-2 h-10 sm:h-11 px-4 sm:px-5 rounded-full bg-[var(--color-bg-subtle)] border border-[var(--color-border)]/25 hover:bg-[var(--color-bg-card)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] text-xs sm:text-sm font-bold disabled:opacity-50 emil-press shadow-sm"
-          >
-            <RefreshCw className={`w-4 h-4 text-[#C08552] ${isSyncing ? 'animate-spin' : ''}`} />
-            <span>{isSyncing ? 'Sincronizando...' : 'Nuvem'}</span>
-          </button>
-
-          <button
-            onClick={onNavigateToTrash}
-            className="flex items-center gap-2 h-10 sm:h-11 px-3 sm:px-4 rounded-full bg-[var(--color-bg-subtle)] border border-[var(--color-border)]/25 hover:bg-[var(--color-bg-card)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] text-xs sm:text-sm font-bold emil-press shadow-sm relative"
-            title="Ver lixeira"
-          >
-            <Archive className="w-4 h-4 text-amber-500" />
-            <span>Lixeira</span>
-            {trashCount > 0 && (
-              <span className="px-1.5 py-0.5 rounded-full bg-rose-500 text-white font-mono text-[10px] font-black">
-                {trashCount}
-              </span>
-            )}
           </button>
         </div>
       </div>
 
       {importStatus && (
-        <div className="p-4 rounded-2xl bg-[var(--color-bg-card)] border border-[var(--color-border)]/25 flex items-center justify-between gap-3 text-xs text-[var(--color-text-primary)] animate-ui-fade shadow-sm">
+        <div className="p-4 rounded-2xl bg-[var(--color-bg-card)] border-[var(--color-border)]/25 flex items-center justify-between gap-3 text-xs text-[var(--color-text-primary)] animate-ui-fade shadow-sm">
           <div className="flex items-center gap-2">
             <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
             <span>{importStatus}</span>
           </div>
           <button onClick={() => setImportStatus(null)} className="text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]">
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-      )}
-
-      {syncStatus && (
-        <div className="p-4 rounded-2xl bg-[var(--color-bg-card)] border border-[var(--color-border)]/25 flex items-center justify-between gap-3 text-xs text-[var(--color-text-primary)] animate-ui-fade shadow-sm">
-          <div className="flex items-center gap-2">
-            {syncStatus.includes('Erro') ? (
-              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
-            ) : (
-              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-            )}
-            <span>{syncStatus}</span>
-          </div>
-          <button onClick={() => setSyncStatus(null)} className="text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -532,7 +457,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </label>
                   <select
                     value={formatMode}
-                    onChange={(e) => setFormatMode(e.target.value as any)}
+                    onChange={(e) =>
+                      setFormatMode(e.target.value as Song["format"] | "auto")
+                    }
                     className="w-full px-3.5 py-2.5 bg-[var(--color-bg-subtle)] border border-[var(--color-border)]/30 rounded-2xl text-base sm:text-sm text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-accent)]"
                   >
                     <option value="auto">Auto-detectar ({detectedFormat})</option>
@@ -607,9 +534,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       format: resolvedFormat,
                       content,
                       createdAt: 0,
-                      updatedAt: 0,
-                      isDeleted: false,
-                      deletedAt: null
+                      updatedAt: 0
                     }}
                     currentKey={resolvedKey}
                     fontSize={16}

@@ -8,7 +8,6 @@ import {
   type Auth,
   type User
 } from 'firebase/auth';
-import { getFirestore, type Firestore } from 'firebase/firestore';
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY || '',
@@ -25,13 +24,11 @@ export const isFirebaseConfigured = Boolean(
 
 let app: FirebaseApp | null = null;
 let auth: Auth | null = null;
-let dbFirestore: Firestore | null = null;
 
 if (isFirebaseConfigured) {
   try {
     app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
     auth = getAuth(app);
-    dbFirestore = getFirestore(app);
   } catch (err) {
     console.warn('Firebase initialization skipped or failed:', err);
   }
@@ -75,4 +72,4 @@ export function subscribeToAuthState(callback: (user: User | null) => void): () 
   return onAuthStateChanged(auth, callback);
 }
 
-export { auth, dbFirestore };
+export { auth };

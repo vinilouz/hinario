@@ -4,8 +4,8 @@ import { useSetlists } from "../context/SetlistListsContext";
 import { useTheme } from "../context/ThemeContext";
 
 interface NavbarProps {
-  currentTab: "index" | "setlists" | "admin" | "trash";
-  setCurrentTab: (tab: "index" | "setlists" | "admin" | "trash") => void;
+  currentTab: "index" | "setlists" | "admin";
+  setCurrentTab: (tab: "index" | "setlists" | "admin") => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({ currentTab, setCurrentTab }) => {
@@ -79,9 +79,9 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, setCurrentTab }) => 
 
             <button
               role="tab"
-              aria-selected={currentTab === "admin" || currentTab === "trash"}
+              aria-selected={currentTab === "admin"}
               onClick={() => setCurrentTab("admin")}
-              className={`flex items-center gap-2 px-4 sm:px-5 py-2 sm:py-2.5 rounded-full text-sm sm:text-base font-bold emil-press ${currentTab === "admin" || currentTab === "trash"
+              className={`flex items-center gap-2 px-4 sm:px-5 py-2 sm:py-2.5 rounded-full text-sm sm:text-base font-bold emil-press ${currentTab === "admin"
                 ? "bg-[var(--color-accent)] text-[var(--color-accent-contrast)] shadow-sm font-bold"
                 : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-card)]"
                 }`}
@@ -148,9 +148,9 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, setCurrentTab }) => 
 
           <button
             role="tab"
-            aria-selected={currentTab === "admin" || currentTab === "trash"}
+            aria-selected={currentTab === "admin"}
             onClick={() => setCurrentTab("admin")}
-            className={`flex flex-col items-center justify-center flex-1 py-1.5 min-h-[56px] rounded-2xl emil-press transition-colors ${currentTab === "admin" || currentTab === "trash"
+            className={`flex flex-col items-center justify-center flex-1 py-1.5 min-h-[56px] rounded-2xl emil-press transition-colors ${currentTab === "admin"
               ? "text-[var(--color-accent)] font-black"
               : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] font-medium"
               }`}

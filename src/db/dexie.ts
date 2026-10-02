@@ -1,6 +1,22 @@
 import Dexie, { type EntityTable } from "dexie";
 import type { Song, Setlist } from "../types";
 
+const LEGACY_TOMBSTONE_KEY = "hinario_deleted_seed_songs";
+
+type TrashedSongRow = Song & { isDeleted?: boolean };
+
+function readTombstonedIds(): string[] {
+  const raw = localStorage.getItem(LEGACY_TOMBSTONE_KEY);
+  if (raw === null) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((entry): entry is string => typeof entry === "string");
+  } catch {
+    return [];
+  }
+}
+
 export class HinarioDB extends Dexie {
   songs!: EntityTable<Song, "id">;
   setlists!: EntityTable<Setlist, "id">;
@@ -17,6 +33,25 @@ export class HinarioDB extends Dexie {
     this.version(3).stores({
       songs: "id, title, artist, leader, originalKey, isDeleted, updatedAt, deletedAt"
     });
+    this.version(4)
+      .stores({
+        songs: "id, title, artist, leader, originalKey, updatedAt",
+        setlists: "id, name, isDefault, updatedAt"
+      })
+      .upgrade(async (tx) => {
+        const trashed = await tx
+          .table<TrashedSongRow, string>("songs")
+          .filter((song) => Boolean(song.isDeleted))
+          .toArray();
+
+        if (trashed.length > 0) {
+          localStorage.setItem(
+            LEGACY_TOMBSTONE_KEY,
+            JSON.stringify([...new Set([...readTombstonedIds(), ...trashed.map((song) => song.id)])])
+          );
+          await tx.table<TrashedSongRow, string>("songs").bulkDelete(trashed.map((song) => song.id));
+        }
+      });
   }
 }
 

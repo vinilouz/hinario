@@ -22,8 +22,6 @@ const songs: Song[] = readdirSync(SONG_DIR)
     format: 'chords-over-lyrics',
     createdAt: 1,
     updatedAt: 1,
-    isDeleted: false,
-    deletedAt: null,
   }));
 
 const items: SetlistItem[] = songs.map((song, i) => ({

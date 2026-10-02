@@ -11,8 +11,6 @@ export interface Song {
   format: "chords-over-lyrics" | "chordpro";
   createdAt: number;
   updatedAt: number;
-  isDeleted: boolean;
-  deletedAt: number | null;
 }
 
 export interface SetlistItem {
@@ -45,7 +43,6 @@ export interface QrSetlistPayload {
 }
 
 export interface AppConfig {
-  trashRetentionDays: number;
   theme: "dark" | "light";
   fontSize: number;
 }

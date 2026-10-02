@@ -3,7 +3,7 @@ import { AuthProvider } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
 import { SetlistListsProvider } from './context/SetlistListsContext';
 import { initializeDatabase } from './db/dexie';
-import { syncSongsWithRemote } from './db/sync';
+import { ensureSeeded } from './services/songService';
 import { Navbar } from './components/Navbar';
 import { Footer } from './components/Footer';
 import { PwaInstallPrompt } from './components/PwaInstallPrompt';
@@ -11,9 +11,8 @@ import { IndexBook } from './pages/IndexBook';
 import { SetlistsPage } from './pages/SetlistsPage';
 import { Performance } from './pages/Performance';
 import { AdminDashboard } from './pages/AdminDashboard';
-import { AdminTrash } from './pages/AdminTrash';
 
-type Tab = 'index' | 'setlists' | 'admin' | 'trash';
+type Tab = 'index' | 'setlists' | 'admin';
 
 export const AppContent: React.FC = () => {
   const [currentTab, setCurrentTab] = useState<Tab>('index');
@@ -23,11 +22,11 @@ export const AppContent: React.FC = () => {
   const [sourceTab, setSourceTab] = useState<'index' | 'setlists'>('index');
 
   useEffect(() => {
-    initializeDatabase().then(() => {
-      syncSongsWithRemote().catch((err) => {
-        console.warn('Initial sync notice:', err);
+    initializeDatabase()
+      .then(ensureSeeded)
+      .catch((err: unknown) => {
+        console.warn('Falha ao preparar o repertório local:', err);
       });
-    });
   }, []);
 
   const handleOpenSongFromIndex = (songId: string) => {
@@ -75,13 +74,7 @@ export const AppContent: React.FC = () => {
           />
         )}
 
-        {currentTab === 'admin' && (
-          <AdminDashboard onNavigateToTrash={() => setCurrentTab('trash')} />
-        )}
-
-        {currentTab === 'trash' && (
-          <AdminTrash onBack={() => setCurrentTab('admin')} />
-        )}
+        {currentTab === 'admin' && <AdminDashboard />}
       </main>
 
       <Footer />

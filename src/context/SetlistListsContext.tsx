@@ -68,7 +68,7 @@ export const SetlistListsProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
         for (const it of sortedItems) {
           const song = await getSongById(it.songId);
-          if (song && !song.isDeleted) {
+          if (song) {
             fullItems.push({
               songId: it.songId,
               customKey: it.customKey || song.originalKey,
