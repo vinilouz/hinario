@@ -22,14 +22,6 @@ export const AppContent: React.FC = () => {
   const [performanceSlotIndex, setPerformanceSlotIndex] = useState<number>(0);
   const [sourceTab, setSourceTab] = useState<'index' | 'setlists'>('index');
 
-  useEffect(() => {
-    initializeDatabase()
-      .then(ensureSeeded)
-      .catch((err: unknown) => {
-        console.warn('Falha ao preparar o repertório local:', err);
-      });
-  }, []);
-
   const handleOpenSongFromIndex = (songId: string) => {
     setPerformanceSongId(songId);
     setPerformanceSlotIndex(0);
@@ -88,13 +80,34 @@ export const AppContent: React.FC = () => {
   );
 };
 
+const AppBooting: React.FC = () => (
+  <div className="min-h-[100dvh] flex items-center justify-center bg-[var(--color-bg-page)] text-[var(--color-text-secondary)]">
+    <span className="text-xs sm:text-sm font-mono animate-pulse">Preparando o repertório local…</span>
+  </div>
+);
+
 export default function App() {
+  const [isLibraryReady, setIsLibraryReady] = useState(false);
+
+  useEffect(() => {
+    initializeDatabase()
+      .then(ensureSeeded)
+      .catch((err: unknown) => {
+        console.warn('Falha ao preparar o repertório local:', err);
+      })
+      .finally(() => setIsLibraryReady(true));
+  }, []);
+
   return (
     <AuthProvider>
       <ThemeProvider>
-        <SetlistListsProvider>
-          <AppContent />
-        </SetlistListsProvider>
+        {isLibraryReady ? (
+          <SetlistListsProvider>
+            <AppContent />
+          </SetlistListsProvider>
+        ) : (
+          <AppBooting />
+        )}
       </ThemeProvider>
     </AuthProvider>
   );

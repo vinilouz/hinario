@@ -23,6 +23,7 @@ const LEADERS: { id: string; label: string }[] = [
 export const IndexBook: React.FC<IndexBookProps> = ({ onOpenSong }) => {
   const { isSongInActiveSetlist, toggleSongInActiveSetlist, activeSetlist, setlists, setActiveSetlistId } = useSetlists();
   const [songs, setSongs] = useState<Song[]>([]);
+  const [isLoadingSongs, setIsLoadingSongs] = useState(true);
   const [query, setQuery] = useState("");
   const [selectedLetter, setSelectedLetter] = useState<string | null>(null);
   const [selectedLeader, setSelectedLeader] = useState<string>("all");
@@ -32,6 +33,7 @@ export const IndexBook: React.FC<IndexBookProps> = ({ onOpenSong }) => {
   useEffect(() => {
     getAllSongs().then((data) => {
       setSongs(data.sort((a, b) => a.title.localeCompare(b.title, "pt-BR")));
+      setIsLoadingSongs(false);
     });
   }, []);
 
@@ -114,7 +116,9 @@ export const IndexBook: React.FC<IndexBookProps> = ({ onOpenSong }) => {
             Todas as Músicas (A-Z)
           </h1>
           <p className="text-sm sm:text-base text-[var(--color-text-secondary)]">
-            {songs.length} louvores disponíveis 100% offline. Toque para abrir a cifra.
+            {isLoadingSongs
+              ? "Carregando o repertório…"
+              : `${songs.length} louvores disponíveis 100% offline. Toque para abrir a cifra.`}
           </p>
         </div>
 
@@ -233,7 +237,7 @@ export const IndexBook: React.FC<IndexBookProps> = ({ onOpenSong }) => {
 
       {/* Song List */}
       <div className="bg-[var(--color-bg-card)] border border-[var(--color-border-subtle)] rounded-3xl divide-y divide-[var(--color-border-subtle)] overflow-hidden shadow-sm">
-        {filteredSongs.length === 0 ? (
+        {isLoadingSongs ? null : filteredSongs.length === 0 ? (
           <div className="p-12 text-center text-[var(--color-text-secondary)] text-sm space-y-2">
             <Music className="w-8 h-8 mx-auto opacity-40 text-[var(--color-accent)]" />
             <p>Nenhuma música encontrada com os filtros buscados.</p>
