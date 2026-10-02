@@ -1,9 +1,10 @@
 import QRCode from 'qrcode';
-import type { QrSetlistPayload, SetlistItem, Song } from '../types';
+import type { QrTransferPayload, Song } from '../types';
 
 // qrcode@1.5.4 byte-mode data capacity at version 40 (lib/core/version.js EC_CODEWORDS_TABLE):
 // L=2953, M=2331, Q=1663, H=1273. Above 2953 no version fits and toDataURL throws.
 const BYTE_CAPACITY_AT_M = 2331;
+const LIST_NAME_MAX_LENGTH = 40;
 
 export function pickErrorCorrectionLevel(payloadBytes: number): 'L' | 'M' {
   return payloadBytes > BYTE_CAPACITY_AT_M ? 'L' : 'M';
@@ -51,110 +52,75 @@ export async function decompressString(encoded: string): Promise<string> {
   }
 }
 
-export async function encodeSetlistToPayload(
+export async function encodeSongTransfer(song: Song): Promise<string> {
+  const payload: QrTransferPayload = { v: 4, kind: 'song', song };
+  return compressString(JSON.stringify(payload));
+}
+
+export async function encodeSetlistTransfer(
   name: string,
-  items: SetlistItem[],
-  songs?: Song[]
-): Promise<string> {
-  const payload: QrSetlistPayload = {
-    v: 2,
-    n: name.trim().slice(0, 40),
-    s: items.map((it) => [it.songId, it.customKey]),
-    songs: songs && songs.length > 0 ? songs : undefined
-  };
-
-  const jsonStr = JSON.stringify(payload);
-  return compressString(jsonStr);
+  entries: { customKey: string; song: Song }[]
+): Promise<string[]> {
+  const listName = name.trim().slice(0, LIST_NAME_MAX_LENGTH);
+  return Promise.all(
+    entries.map(({ customKey, song }, i) => {
+      const payload: QrTransferPayload = {
+        v: 4,
+        kind: 'list',
+        i,
+        t: entries.length,
+        n: listName,
+        k: customKey,
+        song
+      };
+      return compressString(JSON.stringify(payload));
+    })
+  );
 }
 
-export async function decodePayloadToSetlist(
-  raw: string
-): Promise<{
-  name: string;
-  items: { songId: string; customKey: string }[];
-  songs?: Song[];
-} | null> {
+const isFilledString = (value: unknown): boolean =>
+  typeof value === 'string' && value.trim().length > 0;
+
+const isSong = (value: unknown): value is Song => {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return isFilledString(candidate.title) && isFilledString(candidate.content);
+};
+
+const isFiniteNumber = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isFinite(value);
+
+export async function decodeTransfer(raw: string): Promise<QrTransferPayload | null> {
+  let parsed: unknown;
   try {
-    const jsonStr = await decompressString(raw);
-    const parsed: QrSetlistPayload = JSON.parse(jsonStr);
-
-    if (!parsed || !parsed.n || !Array.isArray(parsed.s)) {
-      return null;
-    }
-
-    return {
-      name: parsed.n,
-      items: parsed.s.map(([songId, customKey]) => ({
-        songId,
-        customKey: customKey || 'C'
-      })),
-      songs: Array.isArray(parsed.songs) ? parsed.songs : undefined
-    };
-  } catch (err) {
-    console.warn('Falha ao decodificar QR/código:', err);
-    return null;
-  }
-}
-
-// One QR at 240px render stays scannable only at modest versions, so a full
-// setlist with embedded cifras ships as numbered pages, not one giant code.
-// 1600 chars/chunk at ECC L lands around version 29 (~1.70px/module):
-// measured sweet spot between page count and camera readability.
-// (1200/M = 6 pages, 2000 = v33 1.53px/mod, too dense to scan reliably.)
-export const QR_CHUNK_BUDGET = 1600;
-
-interface QrChunk {
-  v: 3;
-  i: number;
-  t: number;
-  d: string;
-}
-
-export function splitIntoQrChunks(payload: string): string[] {
-  if (payload.length <= QR_CHUNK_BUDGET) return [payload];
-  const total = Math.ceil(payload.length / QR_CHUNK_BUDGET);
-  const chunks: string[] = [];
-  for (let i = 0; i < total; i++) {
-    const envelope: QrChunk = {
-      v: 3,
-      i,
-      t: total,
-      d: payload.slice(i * QR_CHUNK_BUDGET, (i + 1) * QR_CHUNK_BUDGET)
-    };
-    chunks.push(JSON.stringify(envelope));
-  }
-  return chunks;
-}
-
-export function parseQrChunk(text: string): QrChunk | null {
-  try {
-    const parsed: unknown = JSON.parse(text);
-    if (
-      typeof parsed === "object" &&
-      parsed !== null &&
-      (parsed as QrChunk).v === 3 &&
-      typeof (parsed as QrChunk).d === "string" &&
-      typeof (parsed as QrChunk).i === "number" &&
-      typeof (parsed as QrChunk).t === "number"
-    ) {
-      return parsed as QrChunk;
-    }
-    return null;
+    parsed = JSON.parse(await decompressString(raw));
   } catch {
     return null;
   }
-}
 
-export function joinQrChunks(texts: string[]): string | null {
-  const chunks = texts.map(parseQrChunk);
-  if (chunks.some((c) => c === null)) return null;
-  const total = (chunks[0] as QrChunk).t;
-  if (total <= 0 || chunks.length !== total) return null;
-  const ordered = [...(chunks as QrChunk[])].sort((a, b) => a.i - b.i);
-  for (let i = 0; i < total; i++) {
-    if (ordered[i].i !== i || ordered[i].t !== total) return null;
+  if (typeof parsed !== 'object' || parsed === null) return null;
+  const envelope = parsed as Record<string, unknown>;
+
+  if (envelope.v !== 4) return null;
+  if (!isSong(envelope.song)) return null;
+
+  if (envelope.kind === 'song') {
+    return { v: 4, kind: 'song', song: envelope.song };
   }
-  return ordered.map((c) => c.d).join("");
+
+  if (envelope.kind !== 'list') return null;
+  if (!isFiniteNumber(envelope.i) || !isFiniteNumber(envelope.t)) return null;
+  if (typeof envelope.n !== 'string' || typeof envelope.k !== 'string') return null;
+
+  return {
+    v: 4,
+    kind: 'list',
+    i: envelope.i,
+    t: envelope.t,
+    n: envelope.n,
+    k: envelope.k,
+    song: envelope.song
+  };
 }
 
 export async function generateQrDataUrl(payload: string, forceLevel?: 'L' | 'M'): Promise<string> {

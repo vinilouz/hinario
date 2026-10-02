@@ -35,6 +35,24 @@ export interface SetlistItemWithSong {
   song: Song;
 }
 
+export interface QrSongPayload {
+  v: 4;
+  kind: "song";
+  song: Song;
+}
+
+export interface QrListItemPayload {
+  v: 4;
+  kind: "list";
+  i: number;
+  t: number;
+  n: string;
+  k: string;
+  song: Song;
+}
+
+export type QrTransferPayload = QrSongPayload | QrListItemPayload;
+
 export interface QrSetlistPayload {
   v: 1 | 2;
   n: string;
