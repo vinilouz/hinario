@@ -7,6 +7,7 @@ import { ensureSeeded } from './services/songService';
 import { Navbar } from './components/Navbar';
 import { Footer } from './components/Footer';
 import { PwaInstallPrompt } from './components/PwaInstallPrompt';
+import { UpdateTooltip } from './components/UpdateTooltip';
 import { IndexBook } from './pages/IndexBook';
 import { SetlistsPage } from './pages/SetlistsPage';
 import { Performance } from './pages/Performance';
@@ -49,17 +50,21 @@ export const AppContent: React.FC = () => {
 
   if (isPerformanceMode) {
     return (
-      <Performance
-        initialSongId={performanceSongId}
-        initialSlotIndex={performanceSlotIndex}
-        sourceTab={sourceTab}
-        onExit={handleExitPerformance}
-      />
+      <>
+        <Performance
+          initialSongId={performanceSongId}
+          initialSlotIndex={performanceSlotIndex}
+          sourceTab={sourceTab}
+          onExit={handleExitPerformance}
+        />
+        <UpdateTooltip compact />
+      </>
     );
   }
 
   return (
     <div className="min-h-[100dvh] bg-[var(--color-bg-page)] text-[var(--color-text-primary)] flex flex-col selection:bg-[#C08552]/30 selection:text-[var(--color-text-primary)] transition-colors duration-150">
+      <UpdateTooltip />
       <Navbar currentTab={currentTab} setCurrentTab={setCurrentTab} />
 
       <main className="flex-1 pb-20 sm:pb-10">
