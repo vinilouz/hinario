@@ -3,7 +3,11 @@ import {
   saveSong as syncSaveSong,
   softDeleteSong as syncSoftDeleteSong,
   restoreSong as syncRestoreSong,
-  hardDeleteSong as syncHardDeleteSong
+  hardDeleteSong as syncHardDeleteSong,
+  readDeletedSeedIds,
+  rememberDeletedSeedSong,
+  forgetDeletedSeedSong,
+  SEED_ID_PREFIX
 } from "../db/sync";
 import { extractCifraClubKey, detectFormat, COMMON_KEYS } from "./chordEngine";
 import type { Song, SongLeader } from "../types";
@@ -69,7 +73,7 @@ for (const [filePath, loader] of Object.entries(rawSongModules)) {
   }
 
   const slug = slugify(title);
-  const id = `seed_${leader.toLowerCase()}_${slug}`;
+  const id = `${SEED_ID_PREFIX}${leader.toLowerCase()}_${slug}`;
 
   baseEntriesMap.set(id, {
     id,
@@ -110,7 +114,6 @@ async function parseBaseSong(entry: BaseSongEntry): Promise<Song> {
     title: entry.title,
     artist,
     leader: entry.leader,
-    isBase: true,
     bpm,
     originalKey,
     format,
@@ -145,9 +148,11 @@ export async function getAllSongs(): Promise<Song[]> {
 
   const localSongs = await db.songs.toArray();
   const localMap = new Map<string, Song>(localSongs.map((s) => [s.id, s]));
+  const deletedSeedIds = readDeletedSeedIds();
   const result: Song[] = [];
 
   for (const [id, baseSong] of parsedSongCache.entries()) {
+    if (deletedSeedIds.has(id)) continue;
     const local = localMap.get(id);
     if (local) {
       if (!local.isDeleted) {
@@ -159,7 +164,7 @@ export async function getAllSongs(): Promise<Song[]> {
   }
 
   for (const local of localSongs) {
-    if (!local.id.startsWith("seed_") && !local.isDeleted) {
+    if (!local.id.startsWith(SEED_ID_PREFIX) && !local.isDeleted) {
       result.push(local);
     }
   }
@@ -176,13 +181,15 @@ export async function getDeletedSongs(): Promise<Song[]> {
   return localDeleted.map((local) => {
     const base = parsedSongCache.get(local.id);
     return {
-      ...(base ? { title: base.title, artist: base.artist, leader: base.leader, isBase: true, originalKey: base.originalKey } : {}),
+      ...(base ? { title: base.title, artist: base.artist, leader: base.leader, originalKey: base.originalKey } : {}),
       ...local
     };
   });
 }
 
 export async function getSongById(id: string): Promise<Song | null> {
+  if (readDeletedSeedIds().has(id)) return null;
+
   // 1. Check local Dexie for user overrides or custom songs
   const local = await db.songs.get(id);
   if (local) {
@@ -209,19 +216,29 @@ export async function getSongById(id: string): Promise<Song | null> {
 }
 
 export async function saveSong(song: Song): Promise<void> {
+  forgetDeletedSeedSong(song.id);
   await syncSaveSong(song);
   parsedSongCache.set(song.id, song);
 }
 
 export async function softDeleteSong(songId: string): Promise<void> {
-  await syncSoftDeleteSong(songId);
+  const existing = await db.songs.get(songId);
   const base = parsedSongCache.get(songId);
+  if (!existing && !base) return;
+
+  if (!existing && base) {
+    await saveSong({ ...base, isDeleted: true, deletedAt: Date.now() });
+    return;
+  }
+
+  await syncSoftDeleteSong(songId);
   if (base) {
     parsedSongCache.set(songId, { ...base, isDeleted: true, deletedAt: Date.now() });
   }
 }
 
 export async function restoreSong(songId: string): Promise<void> {
+  forgetDeletedSeedSong(songId);
   await syncRestoreSong(songId);
   const base = parsedSongCache.get(songId);
   if (base) {
@@ -230,6 +247,9 @@ export async function restoreSong(songId: string): Promise<void> {
 }
 
 export async function hardDeleteSong(songId: string): Promise<void> {
+  if (baseEntriesMap.has(songId)) {
+    rememberDeletedSeedSong(songId);
+  }
   await syncHardDeleteSong(songId);
   parsedSongCache.delete(songId);
 }

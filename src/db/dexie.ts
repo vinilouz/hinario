@@ -14,6 +14,9 @@ export class HinarioDB extends Dexie {
     this.version(2).stores({
       songs: "id, title, artist, leader, originalKey, isDeleted, updatedAt, deletedAt, isBase"
     });
+    this.version(3).stores({
+      songs: "id, title, artist, leader, originalKey, isDeleted, updatedAt, deletedAt"
+    });
   }
 }
 

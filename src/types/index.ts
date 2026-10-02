@@ -5,7 +5,6 @@ export interface Song {
   title: string;
   artist?: string;
   leader?: SongLeader;
-  isBase?: boolean;
   bpm?: number;
   originalKey: string;
   content: string;

@@ -16,7 +16,7 @@ import {
   Download
 } from 'lucide-react';
 import { db } from '../db/dexie';
-import { syncSongsWithRemote } from '../db/sync';
+import { syncSongsWithRemote, SEED_ID_PREFIX } from '../db/sync';
 import {
   getAllSongs,
   getDeletedSongs,
@@ -174,7 +174,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       title: title.trim(),
       artist: artist.trim() || leader,
       leader: leader || 'Igreja',
-      isBase: existingSong?.isBase ?? false,
       bpm: parsedBpm && !isNaN(parsedBpm) && parsedBpm > 0 ? parsedBpm : undefined,
       originalKey: resolvedKey,
       format: resolvedFormat,
@@ -263,14 +262,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           .replace(/[^a-z0-9]+/g, '-')
           .replace(/^-+|-+$/g, '');
 
-        const id = `seed_${detectedLeader.toLowerCase()}_${slug || `song_${now}_${i}`}`;
+        const id = `${SEED_ID_PREFIX}${detectedLeader.toLowerCase()}_${slug || `song_${now}_${i}`}`;
 
         newSongs.push({
           id,
           title: songTitle,
           artist: detectedLeader,
           leader: detectedLeader,
-          isBase: true,
           bpm: validBpm,
           originalKey: key,
           format: text.includes('[') && text.includes(']') ? 'chordpro' : 'chords-over-lyrics',

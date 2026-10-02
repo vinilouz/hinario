@@ -12,7 +12,34 @@ import {
 import type { Song } from '../types';
 
 const LAST_SYNC_KEY = 'hinario_last_sync_timestamp';
+const DELETED_SEED_KEY = 'hinario_deleted_seed_songs';
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+
+export const SEED_ID_PREFIX = 'seed_';
+
+export function readDeletedSeedIds(): Set<string> {
+  const raw = localStorage.getItem(DELETED_SEED_KEY);
+  if (raw === null) return new Set();
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.filter((entry): entry is string => typeof entry === 'string'));
+  } catch {
+    return new Set();
+  }
+}
+
+export function rememberDeletedSeedSong(songId: string): void {
+  const ids = readDeletedSeedIds();
+  ids.add(songId);
+  localStorage.setItem(DELETED_SEED_KEY, JSON.stringify([...ids]));
+}
+
+export function forgetDeletedSeedSong(songId: string): void {
+  const ids = readDeletedSeedIds();
+  if (!ids.delete(songId)) return;
+  localStorage.setItem(DELETED_SEED_KEY, JSON.stringify([...ids]));
+}
 
 export async function purgeExpiredSongs(retentionMs: number = THIRTY_DAYS_MS): Promise<void> {
   const now = Date.now();
@@ -27,6 +54,9 @@ export async function purgeExpiredSongs(retentionMs: number = THIRTY_DAYS_MS): P
 
     for (const song of expiredSongs) {
       await db.songs.delete(song.id);
+      if (song.id.startsWith(SEED_ID_PREFIX)) {
+        rememberDeletedSeedSong(song.id);
+      }
       if (isFirebaseConfigured && dbFirestore) {
         try {
           await deleteDoc(doc(dbFirestore, 'songs', song.id));
