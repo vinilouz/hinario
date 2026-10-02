@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { X, Camera, Clipboard, AlertCircle, CheckCircle2, Play, Trash2 } from "lucide-react";
 import { Html5Qrcode } from "html5-qrcode";
@@ -18,6 +18,9 @@ interface PendingTransfer {
   t: number;
   k: string[];
   r: number[];
+  // Added after a stuck-transfer bug: k holds only the customKey, so nothing else
+  // maps an index back to a saved song. Absent in records written before this field.
+  s?: string[];
 }
 
 interface ListCode {
@@ -33,7 +36,12 @@ const PENDING_KEY = "hinario_pending_transfer";
 const readPending = (): PendingTransfer | null => {
   const raw = localStorage.getItem(PENDING_KEY);
   if (raw === null) return null;
-  const parsed: unknown = JSON.parse(raw);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
   if (typeof parsed !== "object" || parsed === null) return null;
   const candidate = parsed as Partial<PendingTransfer>;
   const keys = candidate.k;
@@ -48,7 +56,14 @@ const readPending = (): PendingTransfer | null => {
   ) {
     return null;
   }
-  return { n: candidate.n, t: candidate.t, k: keys, r: received };
+  const songIds = candidate.s;
+  if (songIds === undefined) {
+    return { n: candidate.n, t: candidate.t, k: keys, r: received };
+  }
+  if (!Array.isArray(songIds) || songIds.some((v) => typeof v !== "string")) {
+    return null;
+  }
+  return { n: candidate.n, t: candidate.t, k: keys, r: received, s: songIds };
 };
 
 const writePending = (pending: PendingTransfer) => {
@@ -60,7 +75,7 @@ const clearPending = () => {
 };
 
 export const ScanQrModal: React.FC<ScanQrModalProps> = ({ isOpen, onClose }) => {
-  const { importSetlist } = useSetlists();
+  const { importSetlist, canCreateMore } = useSetlists();
   const [activeTab, setActiveTab] = useState<"camera" | "paste">(() =>
     window.matchMedia("(min-width: 640px)").matches ? "paste" : "camera"
   );
@@ -70,11 +85,15 @@ export const ScanQrModal: React.FC<ScanQrModalProps> = ({ isOpen, onClose }) => 
   const [pending, setPending] = useState<PendingTransfer | null>(null);
   const [showResume, setShowResume] = useState(false);
   const [conflict, setConflict] = useState<ListCode | null>(null);
+  const [ready, setReady] = useState<{ name: string; items: { songId: string; customKey: string }[] } | null>(
+    null
+  );
   const receivedSongsRef = useRef<Map<number, Song>>(new Map());
 
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const isScanningRef = useRef<boolean>(false);
   const isBusyRef = useRef<boolean>(false);
+  const scanHandlerRef = useRef<(raw: string) => void>(() => {});
 
   const stopScanner = async () => {
     if (scannerRef.current && isScanningRef.current) {
@@ -98,77 +117,113 @@ export const ScanQrModal: React.FC<ScanQrModalProps> = ({ isOpen, onClose }) => 
     receivedSongsRef.current.clear();
   };
 
-  const finishTransfer = async (state: PendingTransfer) => {
+  const assembleTransfer = async (state: PendingTransfer) => {
+    const ids = state.s ?? [];
     const items: { songId: string; customKey: string }[] = [];
     for (let i = 0; i < state.t; i++) {
-      const song = receivedSongsRef.current.get(i);
-      if (song === undefined) {
-        setErrorMsg(
-          `Mostre de novo o código da música ${i + 1} para fechar a lista "${state.n}".`
-        );
-        return;
+      const fromMemory = receivedSongsRef.current.get(i);
+      const songId = ids[i] ?? fromMemory?.id;
+      if (songId === undefined) {
+        setErrorMsg(`Mostre de novo o código da música ${i + 1} para fechar a lista "${state.n}".`);
+        return false;
       }
-      items.push({ songId: song.id, customKey: state.k[i] });
+      items.push({ songId, customKey: state.k[i] });
     }
-    const result = await importSetlist(state.n, items, "new");
-    clearPending();
     setPending(null);
-    receivedSongsRef.current.clear();
+    setReady({ name: state.n, items });
+    return true;
+  };
+
+  const confirmTransfer = async (mode: "new" | "replace") => {
+    if (ready === null) return;
+    const result = await importSetlist(ready.name, ready.items, mode);
     if (!result.success) {
       setErrorMsg(result.message || "Erro ao montar a lista.");
       return;
     }
-    setSuccessMsg(`Lista "${state.n}" pronta com ${items.length} músicas offline!`);
+    clearPending();
+    setPending(null);
+    setReady(null);
+    receivedSongsRef.current.clear();
+    setSuccessMsg(`Lista "${ready.name}" pronta com ${ready.items.length} músicas offline!`);
     setTimeout(() => onClose(), 1400);
   };
 
-  const acceptListCode = async (code: ListCode) => {
-    const base = pending !== null && pending.n === code.n ? pending : { n: code.n, t: code.t, k: [], r: [] };
-    if (base.r.includes(code.i)) return;
+  const acceptListCode = useCallback(async (code: ListCode) => {
+    const stored = readPending();
+    const base = stored !== null && stored.n === code.n ? stored : { n: code.n, t: code.t, k: [], r: [] };
+    if (base.r.includes(code.i)) {
+      if (base.r.length === base.t) {
+        await assembleTransfer(base);
+      }
+      return;
+    }
     await saveSong(code.song);
     receivedSongsRef.current.set(code.i, code.song);
     const keys = Array.from({ length: base.t }, (_, index) => base.k[index] ?? "");
     keys[code.i] = code.k;
-    const next: PendingTransfer = { n: base.n, t: base.t, k: keys, r: [...base.r, code.i] };
+    const songIds = Array.from({ length: base.t }, (_, index) => base.s?.[index] ?? "");
+    songIds[code.i] = code.song.id;
+    const next: PendingTransfer = {
+      n: base.n,
+      t: base.t,
+      k: keys,
+      r: [...base.r, code.i],
+      s: songIds
+    };
     writePending(next);
     setPending(next);
     if (next.r.length === next.t) {
-      await finishTransfer(next);
+      await assembleTransfer(next);
     }
-  };
+  }, []);
 
-  const handleCodes = async (raw: string) => {
-    setErrorMsg(null);
-    setSuccessMsg(null);
-    const segments = raw
-      .split(QR_TEXT_SEPARATOR)
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0);
-    for (const segment of segments) {
-      const decoded = await decodeTransfer(segment);
-      if (decoded === null) {
-        setErrorMsg("QR Code ou código inválido. Verifique se copiou o código completo.");
-        return;
+  const handleCodes = useCallback(
+    async (raw: string) => {
+      if (isBusyRef.current) return;
+      isBusyRef.current = true;
+      try {
+        setErrorMsg(null);
+        setSuccessMsg(null);
+        const segments = raw
+          .split(QR_TEXT_SEPARATOR)
+          .map((s) => s.trim())
+          .filter((s) => s.length > 0);
+        for (const segment of segments) {
+          const decoded = await decodeTransfer(segment);
+          if (decoded === null) {
+            setErrorMsg("QR Code ou código inválido. Verifique se copiou o código completo.");
+            return;
+          }
+          if (decoded.kind === "song") {
+            await saveSong(decoded.song);
+            setSuccessMsg(`Música "${decoded.song.title}" salva no aplicativo.`);
+            continue;
+          }
+          const code: ListCode = {
+            n: decoded.n,
+            t: decoded.t,
+            i: decoded.i,
+            k: decoded.k,
+            song: decoded.song
+          };
+          const stored = readPending();
+          if (stored !== null && stored.n !== code.n) {
+            setConflict(code);
+            return;
+          }
+          await acceptListCode(code);
+        }
+      } finally {
+        isBusyRef.current = false;
       }
-      if (decoded.kind === "song") {
-        await saveSong(decoded.song);
-        setSuccessMsg(`Música "${decoded.song.title}" salva no aplicativo.`);
-        continue;
-      }
-      const code: ListCode = {
-        n: decoded.n,
-        t: decoded.t,
-        i: decoded.i,
-        k: decoded.k,
-        song: decoded.song
-      };
-      if (pending !== null && pending.n !== code.n) {
-        setConflict(code);
-        return;
-      }
-      await acceptListCode(code);
-    }
-  };
+    },
+    [acceptListCode]
+  );
+
+  useEffect(() => {
+    scanHandlerRef.current = handleCodes;
+  }, [handleCodes]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -177,16 +232,29 @@ export const ScanQrModal: React.FC<ScanQrModalProps> = ({ isOpen, onClose }) => 
       setSuccessMsg(null);
       setPastedCode("");
       setConflict(null);
-      const restored = readPending();
-      setPending(restored);
-      setShowResume(restored !== null);
+      setReady(null);
       return;
     }
-    setPending(readPending());
+    const restored = readPending();
+    if (restored === null) {
+      setPending(null);
+      setShowResume(false);
+      return;
+    }
+    if (restored.r.length === restored.t) {
+      const assembled = assembleTransfer(restored);
+      if (!assembled) {
+        setPending(restored);
+        setShowResume(true);
+      }
+      return;
+    }
+    setPending(restored);
+    setShowResume(true);
   }, [isOpen]);
 
   useEffect(() => {
-    if (!isOpen || activeTab !== "camera" || showResume || conflict !== null) return;
+    if (!isOpen || activeTab !== "camera" || showResume || conflict !== null || ready !== null) return;
 
     const html5QrCode = new Html5Qrcode("qr-reader-region");
     scannerRef.current = html5QrCode;
@@ -196,15 +264,7 @@ export const ScanQrModal: React.FC<ScanQrModalProps> = ({ isOpen, onClose }) => 
         { facingMode: "environment" },
         { fps: 10, qrbox: { width: 220, height: 220 } },
         (decodedText) => {
-          if (isBusyRef.current) return;
-          isBusyRef.current = true;
-          handleCodes(decodedText)
-            .catch(() => {
-              setErrorMsg("Não deu para ler este código. Aponte de novo para ele.");
-            })
-            .finally(() => {
-              isBusyRef.current = false;
-            });
+          scanHandlerRef.current(decodedText);
         },
         () => {}
       )
@@ -219,7 +279,7 @@ export const ScanQrModal: React.FC<ScanQrModalProps> = ({ isOpen, onClose }) => 
     return () => {
       stopScanner();
     };
-  }, [isOpen, activeTab, showResume, conflict]);
+  }, [isOpen, activeTab, showResume, conflict, ready]);
 
   if (!isOpen) return null;
   if (typeof document === "undefined") return null;
@@ -284,6 +344,56 @@ export const ScanQrModal: React.FC<ScanQrModalProps> = ({ isOpen, onClose }) => 
                 <span>Descartar e recomeçar</span>
               </button>
             </div>
+          </div>
+        ) : ready !== null ? (
+          <div className="space-y-4 animate-ui-fade">
+            <div className="p-4 rounded-2xl bg-[var(--color-bg-subtle)] border border-[var(--color-border-subtle)] space-y-1.5 text-center">
+              <span className="text-[11px] font-mono text-[var(--color-accent)] uppercase font-bold tracking-wider">
+                Lista Recebida
+              </span>
+              <h3 className="text-lg font-black text-[var(--color-text-primary)] leading-tight">
+                {ready.name}
+              </h3>
+              <p className="text-xs text-[var(--color-text-secondary)] font-mono tnum">
+                {ready.items.length} {ready.items.length === 1 ? "música salva" : "músicas salvas"}{" "}
+                neste celular
+              </p>
+            </div>
+            <p className="text-xs text-[var(--color-text-secondary)] leading-relaxed text-left">
+              Escolha onde guardar esta lista. Você pode criar uma lista nova ou trocar o conteúdo da
+              lista que está aberta agora.
+            </p>
+            <div className="flex flex-col gap-2 pt-1">
+              <button
+                onClick={() => confirmTransfer("new")}
+                disabled={!canCreateMore}
+                className="w-full h-9 flex items-center justify-center rounded-full bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] emil-press text-[var(--color-accent-contrast)] text-xs font-bold shadow-md shadow-[var(--color-accent)]/20 disabled:opacity-40"
+              >
+                Salvar como Nova Lista
+              </button>
+              <button
+                onClick={() => confirmTransfer("replace")}
+                className="w-full h-9 flex items-center justify-center rounded-full bg-[var(--color-bg-subtle)] border border-[var(--color-border-subtle)] hover:bg-[var(--color-bg-card)] emil-press text-[var(--color-text-primary)] text-xs font-semibold"
+              >
+                Substituir Lista Aberta
+              </button>
+            </div>
+            {!canCreateMore && (
+              <p className="text-[11px] text-[var(--color-text-secondary)] leading-relaxed">
+                Você chegou ao limite de listas. Apague uma lista antiga para poder criar outra, ou
+                substitua a lista aberta.
+              </p>
+            )}
+            <button
+              onClick={() => {
+                discardPending();
+                setReady(null);
+              }}
+              className="w-full h-8 flex items-center justify-center gap-1.5 rounded-full text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] emil-press"
+            >
+              <Trash2 className="w-3.5 h-3.5 shrink-0" />
+              <span>Descartar esta lista</span>
+            </button>
           </div>
         ) : conflict !== null ? (
           <div className="space-y-4 animate-ui-fade">
