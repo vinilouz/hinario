@@ -49,7 +49,7 @@ export const ShareQrModal: React.FC<ShareQrModalProps> = ({ isOpen, setlist, onC
         const pages = splitIntoQrChunks(code);
         const urls: string[] = [];
         for (const page of pages) {
-          urls.push(await generateQrDataUrl(page));
+          urls.push(await generateQrDataUrl(page, pages.length > 1 ? "L" : undefined));
           if (isCancelled) return;
         }
         setQrUrls(urls);

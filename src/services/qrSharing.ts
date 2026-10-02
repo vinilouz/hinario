@@ -98,8 +98,10 @@ export async function decodePayloadToSetlist(
 
 // One QR at 240px render stays scannable only at modest versions, so a full
 // setlist with embedded cifras ships as numbered pages, not one giant code.
-// 1200 chars/chunk lands around version 22 at ECC M (~2.2px/module).
-export const QR_CHUNK_BUDGET = 1200;
+// 1600 chars/chunk at ECC L lands around version 29 (~1.70px/module):
+// measured sweet spot between page count and camera readability.
+// (1200/M = 6 pages, 2000 = v33 1.53px/mod, too dense to scan reliably.)
+export const QR_CHUNK_BUDGET = 1600;
 
 interface QrChunk {
   v: 3;
@@ -155,10 +157,10 @@ export function joinQrChunks(texts: string[]): string | null {
   return ordered.map((c) => c.d).join("");
 }
 
-export async function generateQrDataUrl(payload: string): Promise<string> {
+export async function generateQrDataUrl(payload: string, forceLevel?: 'L' | 'M'): Promise<string> {
   try {
     return await QRCode.toDataURL(payload, {
-      errorCorrectionLevel: pickErrorCorrectionLevel(payload.length),
+      errorCorrectionLevel: forceLevel ?? pickErrorCorrectionLevel(payload.length),
       margin: 2,
       color: {
         dark: '#1D1211',
